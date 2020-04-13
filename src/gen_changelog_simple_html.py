@@ -37,7 +37,9 @@ class ChangelogSimpleHtml:
         self.args = args
         self.out = args.out
         if not os.path.exists(self.out):
-            os.makedirs(os.path.dirname(self.out))
+            out_dir = os.path.dirname(self.out)
+            if not os.path.exists(out_dir):
+                os.makedirs(out_dir)
 
         if os.path.isdir(self.out):
             self.out = os.path.join(self.out, 'index.html')

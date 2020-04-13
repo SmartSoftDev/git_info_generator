@@ -152,7 +152,7 @@ def _save_installation_info(cmp_file_path, final_hash, repos, location, inst_dur
     else:
         info['first_install'] = info['install'].copy()
         info['first_install']['repos'] = info['repos'].copy()
-        info['first_install']['repos'] = info['hash']
+        info['first_install']['hash'] = info['hash']
 
     if old_info:
         new_info = old_info.copy()
