@@ -41,9 +41,6 @@ class ChangelogSimpleHtml:
             if not os.path.exists(out_dir):
                 os.makedirs(out_dir)
 
-        if os.path.isdir(self.out):
-            self.out = os.path.join(self.out, 'index.html')
-
         self.j_env = Environment(
             loader=PackageLoader('tpls', '.'),
             autoescape=select_autoescape(['html', 'xml'])
@@ -62,6 +59,10 @@ class ChangelogSimpleHtml:
         if self.name is None:
             raise self.ChangeLogException(f"git_component config does not have name filed in {self.file}")
         self.name_slug = slugify(self.name)
+
+        if os.path.isdir(self.out):
+            self.out = os.path.join(self.out, f'{self.name_slug}.html')
+
         changelog_file_name = self.CHANGELOG_FILE_NAME.format(cmp_name_slug=self.name_slug)
         if self.args.user:
             self.changelog_file = os.path.join(
