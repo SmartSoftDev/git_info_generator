@@ -304,6 +304,10 @@ def main():
             print(f"Generate changelog ... ")
             if info['first_install']['hash'] == final_hash:
                 # this means it is first install
+                # we need to reset the changelog
+                old_changelog_info = {
+                    "history": []
+                }
                 print(f"First install detected, computing all commits on the component ...")
                 repos = {}
             else:
@@ -323,7 +327,7 @@ def main():
                     raise Exception(f"Could not get git remote repo from {loc}, is it under git control?")
                 repo = resp
                 loc = os.path.join(cfg.cwd, loc)
-                cmd = ["git", "log", '--format=_#._%H|$.|%aN|$.|%aI|$.|%s|$.|%B']
+                cmd = ["git", "log", '--format=_#._%H|$.|%aN|$.|%aI|$.|%s|$.|%b']
                 if repo in repos:
                     cmd.append(f"{repos[repo]}..HEAD")
                 cmd += ["--", loc]

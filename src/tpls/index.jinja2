@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+    <head>
+        <meta charset="utf-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Changelog
+            {{ name }}</title>
+        <link rel="canonical" href="https://jinja.palletsprojects.com/en/2.11.x/intro/"/>
+    </head>
+    <body>
+        <ul>
+            {% for item in history %}
+                <li>
+                    {{ item["utctime"] }}
+                    ({{ item["hash"][:10] }})
+
+                    <ul>
+                        {% for repo, commits  in item['changelog'].items() %}
+                            <li>
+                                <a href="">{{ repo }}</a>
+                                <ul>
+                                    {% for commit in commits %}
+                                        <li>
+                                            <a href="">{{ commit['hash'][:8] }}
+                                            </a>
+
+                                            {{ commit['subject'] }}
+                                            ({{ commit['author'] }})-
+                                            {{ commit['time'] }}
+
+                                            {% if commit['body']|length %}
+
+
+                                                <ul>
+                                                    <li>{{ commit['body'] }}</li>
+                                                </ul>
+                                            {% endif %}
+
+                                        </li>
+                                    {% endfor %}
+                                </ul>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </li>
+
+
+            {% endfor %}
+        </ul>
+    </body>
+</html></body></html></body></html></body></html>
