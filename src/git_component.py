@@ -109,18 +109,19 @@ class GitComponent:
 
     def _run_scripts(self, scripts):
         i = 0
-        res = True
+        res = 0
+        res_ret_code = 0
         start_time = timer()
         for script in scripts:
             i += 1
             print(f"Running {i} of {len(scripts)}: {script!r} =====================================")
             sys.stdout.flush()
-            res = subprocess.run(script, shell=True, cwd=self.cwd)
+            script_res = subprocess.run(script, shell=True, cwd=self.cwd)
             print("=====================================")
             sys.stdout.flush()
-            if res.returncode != 0:
-                print(f"Error: returncode={res.returncode} when running {script!r}")
-                res = False
+            if script_res.returncode != 0:
+                print(f"Error: returncode={script_res.returncode} when running {script!r}")
+                res = script_res.returncode
                 break
         end_time = timer()
         return res, round(end_time-start_time, 3)
@@ -205,6 +206,7 @@ class GitComponent:
         self.real_cfg_file = os.path.realpath(cfg_file)
         with open(cfg_file, "r") as f:
             self.file = yaml.safe_load(f)
+        self.is_just_installed = False
 
     def _debug(self, txt):
         if self.args.debug:
@@ -279,9 +281,9 @@ class GitComponent:
             if not inst_scripts or len(inst_scripts) == 0:
                 print("Nothing to run: install-scripts is empty or missing")
             else:
-                install_res, install_duration = self._run_scripts(inst_scripts)
-                print(f"Installation of component={cmp_name!r} has {'succeeded' if install_res else 'FAILED'}")
-                if install_res:
+                scripts_res, install_duration = self._run_scripts(inst_scripts)
+                print(f"Installation of component={cmp_name!r} has {'succeeded' if scripts_res is 0 else 'FAILED'}")
+                if scripts_res is 0:
                     info = self._save_installation_info(
                         cmp_file_name,
                         final_hash,
@@ -289,6 +291,9 @@ class GitComponent:
                         self.real_cfg_file,
                         install_duration
                     )
+                    self.is_just_installed = True
+                else:
+                    return scripts_res
 
         if self.args.changelog:
             # Changelog must be executed before updating to the newest version
@@ -302,9 +307,12 @@ class GitComponent:
                 }
             if len(old_changelog_info['history']) > 0 and old_changelog_info['history'][0]['hash'] == final_hash:
                 print(f"The changelog for {cmp_name} was already generated ...")
+            elif info is None:
+                print(f"ERROR: The component {cmp_name!r} was never installed => cannot generate Changelog")
             else:
                 print(f"Generate changelog ... ")
-                if info['first_install']['hash'] == final_hash:
+
+                if info.get('first_install',dict()).get('hash') == final_hash:
                     # this means it is first install
                     # we need to reset the changelog
                     old_changelog_info = {
@@ -358,7 +366,7 @@ class GitComponent:
                 with open(cmp_changelog_file_path, "w+") as f:
                     yaml.safe_dump(old_changelog_info, f)
 
-        if self.args.update_check and info:
+        if self.args.update_check and info and not self.is_just_installed:
             if info['hash'] == final_hash:
                 print(f"Component {cmp_name!r} is up to date ...")
             else:
@@ -369,8 +377,8 @@ class GitComponent:
                         f"Repo={repo} with repo_commit={repo_hash[:8]} -> {info.get('repos',{}).get(repo,'')[:8]}")
                 update_scripts = self.file.get("update-scripts", [])
                 scripts_res, scripts_duration = self._run_scripts(update_scripts)
-                print(f"Update of component={cmp_name!r} has {'succeeded' if scripts_res else 'FAILED'}")
-                if scripts_res:
+                print(f"Update of component={cmp_name!r} has {'succeeded' if scripts_res is 0 else 'FAILED'}")
+                if scripts_res is 0:
                     info = self._save_installation_info(
                         cmp_file_name,
                         final_hash,
@@ -381,6 +389,10 @@ class GitComponent:
                         info
                     )
 
+                else:
+                    return scripts_res
+        return 0
+
 
 if __name__ == "__main__":
-    GitComponent(args_parse()).run()
+    sys.exit(GitComponent(args_parse()).run())
