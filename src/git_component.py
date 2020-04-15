@@ -354,7 +354,7 @@ class GitComponent:
                         if repo not in changelog:
                             changelog[repo] = []
                         changelog[repo].append(commit)
-                info = {
+                new_changelog_info = {
                     "hash": final_hash,
                     "utcepoch": info['install']['utcepoch'],
                     "utctime": info['install']['utctime'],
@@ -362,7 +362,7 @@ class GitComponent:
                     "repos": info['repos'],
                     "location": cmp_file_name
                 }
-                old_changelog_info['history'].insert(0, info)
+                old_changelog_info['history'].insert(0, new_changelog_info)
                 with open(cmp_changelog_file_path, "w+") as f:
                     yaml.safe_dump(old_changelog_info, f)
 
@@ -374,7 +374,7 @@ class GitComponent:
                 repos = self._get_repo_hash(locations)
                 for repo, repo_hash in repos.items():
                     print(
-                        f"Repo={repo} with repo_commit={repo_hash[:8]} -> {info.get('repos',{}).get(repo,'')[:8]}")
+                        f"Repo={repo} with repo_commit={info.get('repos',{}).get(repo,'')[:8]} -> {repo_hash[:8]}")
                 update_scripts = self.file.get("update-scripts", [])
                 scripts_res, scripts_duration = self._run_scripts(update_scripts)
                 print(f"Update of component={cmp_name!r} has {'succeeded' if scripts_res is 0 else 'FAILED'}")
