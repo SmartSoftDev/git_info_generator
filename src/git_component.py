@@ -139,22 +139,20 @@ class GitComponent:
         inst_time = datetime.datetime.utcnow()
         inst_epoch = round(inst_time.timestamp(), 3)
         info = {
-            "hash": final_hash,
-            "repos": repos,
-            "install": {
+            "current_version": {
+                "hash": final_hash,
+                "repos": repos,
                 "utctime": inst_time,
                 "utcepoch": inst_epoch,
                 "location": location,
                 "duration": inst_duration,
-            },
+            }
         }
 
         if update:
-            info['install']['is_updated'] = update
+            info['previous_version'] = old_info['current_version'].copy()
         else:
-            info['first_install'] = info['install'].copy()
-            info['first_install']['repos'] = info['repos'].copy()
-            info['first_install']['hash'] = info['hash']
+            info['first_version'] = info['current_version'].copy()
 
         if old_info:
             new_info = old_info.copy()
@@ -162,7 +160,7 @@ class GitComponent:
 
         with open(cmp_file_path, "w+") as f:
             yaml.safe_dump(info, f)
-        print(f"Installation info saved in {cmp_file_path}")
+        print(f"{'Update' if update else 'Installation'} info saved in {cmp_file_path}")
         return info
 
     @staticmethod
@@ -207,6 +205,7 @@ class GitComponent:
         with open(cfg_file, "r") as f:
             self.file = yaml.safe_load(f)
         self.is_just_installed = False
+        self.is_just_updated = False
 
     def _debug(self, txt):
         if self.args.debug:
@@ -251,7 +250,7 @@ class GitComponent:
         for loc in locations:
             loc = os.path.join(self.cwd, loc)
             cmd = ["git", "log", "-n1", '--format=%H', "--", loc]
-            resp = subprocess.check_output(cmd).decode("utf-8").strip()
+            resp = subprocess.check_output(cmd, cwd=self.cwd).decode("utf-8").strip()
             if len(resp) == 0:
                 raise self.GitComponentException(f"Could not get git has from {loc}, is it under git control?")
             self._debug(f"\t{loc} {resp!s}")
@@ -295,7 +294,32 @@ class GitComponent:
                 else:
                     return scripts_res
 
-        if self.args.changelog:
+        if self.args.update_check and info and not self.is_just_installed:
+            if info['current_version']['hash'] == final_hash:
+                print(f"Component {cmp_name!r} is up to date ...")
+            else:
+                print(f"Component {cmp_name!r} must be updated ...")
+                repos = self._get_repo_hash(locations)
+                for repo, repo_hash in repos.items():
+                    print(f"Repo={repo} with "
+                          f"repo_commit={info['current_version']['repos'].get(repo,'')[:8]} -> {repo_hash[:8]}")
+                update_scripts = self.file.get("update-scripts", [])
+                scripts_res, scripts_duration = self._run_scripts(update_scripts)
+                print(f"Update of component={cmp_name!r} has {'succeeded' if scripts_res is 0 else 'FAILED'}")
+                if scripts_res is 0:
+                    info = self._save_installation_info(
+                        cmp_file_name,
+                        final_hash,
+                        repos,
+                        self.real_cfg_file,
+                        scripts_duration,
+                        True,
+                        info
+                    )
+                    self.is_just_updated = True
+                else:
+                    return scripts_res
+        if self.args.changelog and (self.is_just_installed or self.is_just_updated):
             # Changelog must be executed before updating to the newest version
             cmp_changelog_file_path = os.path.join(store_dir, f"{cmp_name_slug}_changelog.yml")
             if os.path.exists(cmp_changelog_file_path):
@@ -307,12 +331,9 @@ class GitComponent:
                 }
             if len(old_changelog_info['history']) > 0 and old_changelog_info['history'][0]['hash'] == final_hash:
                 print(f"The changelog for {cmp_name} was already generated ...")
-            elif info is None:
-                print(f"ERROR: The component {cmp_name!r} was never installed => cannot generate Changelog")
             else:
                 print(f"Generate changelog ... ")
-
-                if info.get('first_install',dict()).get('hash') == final_hash:
+                if info.get('first_version', dict()).get('hash') == final_hash:
                     # this means it is first install
                     # we need to reset the changelog
                     old_changelog_info = {
@@ -321,7 +342,7 @@ class GitComponent:
                     print(f"First install detected, computing all commits on the component ...")
                     repos = {}
                 else:
-                    repos = info['repos']
+                    repos = info['previous_version']['repos']
 
                 changelog = {}
                 unique_commit_hash = []
@@ -356,41 +377,17 @@ class GitComponent:
                         changelog[repo].append(commit)
                 new_changelog_info = {
                     "hash": final_hash,
-                    "utcepoch": info['install']['utcepoch'],
-                    "utctime": info['install']['utctime'],
+                    "utcepoch": info['current_version']['utcepoch'],
+                    "utctime": info['current_version']['utctime'],
                     "changelog": changelog,
-                    "repos": info['repos'],
+                    "repos": info['current_version']['repos'],
                     "location": cmp_file_name
                 }
                 old_changelog_info['history'].insert(0, new_changelog_info)
                 with open(cmp_changelog_file_path, "w+") as f:
                     yaml.safe_dump(old_changelog_info, f)
 
-        if self.args.update_check and info and not self.is_just_installed:
-            if info['hash'] == final_hash:
-                print(f"Component {cmp_name!r} is up to date ...")
-            else:
-                print(f"Component {cmp_name!r} must be updated ...")
-                repos = self._get_repo_hash(locations)
-                for repo, repo_hash in repos.items():
-                    print(
-                        f"Repo={repo} with repo_commit={info.get('repos',{}).get(repo,'')[:8]} -> {repo_hash[:8]}")
-                update_scripts = self.file.get("update-scripts", [])
-                scripts_res, scripts_duration = self._run_scripts(update_scripts)
-                print(f"Update of component={cmp_name!r} has {'succeeded' if scripts_res is 0 else 'FAILED'}")
-                if scripts_res is 0:
-                    info = self._save_installation_info(
-                        cmp_file_name,
-                        final_hash,
-                        repos,
-                        self.real_cfg_file,
-                        scripts_duration,
-                        True,
-                        info
-                    )
 
-                else:
-                    return scripts_res
         return 0
 
 
