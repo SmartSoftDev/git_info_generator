@@ -281,8 +281,8 @@ class GitComponent:
                 print("Nothing to run: install-scripts is empty or missing")
             else:
                 scripts_res, install_duration = self._run_scripts(inst_scripts)
-                print(f"Installation of component={cmp_name!r} has {'succeeded' if scripts_res is 0 else 'FAILED'}")
-                if scripts_res is 0:
+                print(f"Installation of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
+                if scripts_res == 0:
                     info = self._save_installation_info(
                         cmp_file_name,
                         final_hash,
@@ -305,8 +305,8 @@ class GitComponent:
                           f"repo_commit={info['current_version']['repos'].get(repo,'')[:8]} -> {repo_hash[:8]}")
                 update_scripts = self.file.get("update-scripts", [])
                 scripts_res, scripts_duration = self._run_scripts(update_scripts)
-                print(f"Update of component={cmp_name!r} has {'succeeded' if scripts_res is 0 else 'FAILED'}")
-                if scripts_res is 0:
+                print(f"Update of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
+                if scripts_res == 0:
                     info = self._save_installation_info(
                         cmp_file_name,
                         final_hash,
