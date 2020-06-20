@@ -255,7 +255,7 @@ class GitComponent:
         if self.args.unittest_check:
             inst_scripts = self.file.get("unittest-scripts", [])
             if not inst_scripts or len(inst_scripts) == 0:
-                print("Nothing to run: install-scripts is empty or missing")
+                print(f"Nothing to run for {cmp_name}: unittest-scripts is empty or missing")
             else:
                 scripts_res, install_duration = self._run_scripts(inst_scripts)
                 print(f"Unittest of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
@@ -313,7 +313,7 @@ class GitComponent:
 
             inst_scripts = self.file.get("install-scripts", [])
             if not inst_scripts or len(inst_scripts) == 0:
-                print("Nothing to run: install-scripts is empty or missing")
+                print(f"Nothing to run for {cmp_name}: install-scripts is empty or missing")
             else:
                 scripts_res, install_duration = self._run_scripts(inst_scripts)
                 print(f"Installation of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
@@ -339,21 +339,24 @@ class GitComponent:
                     print(f"Repo={repo} with "
                           f"repo_commit={info['current_version']['repos'].get(repo,'')[:8]} -> {repo_hash[:8]}")
                 update_scripts = self.file.get("update-scripts", [])
-                scripts_res, scripts_duration = self._run_scripts(update_scripts)
-                print(f"Update of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
-                if scripts_res == 0:
-                    info = self._save_installation_info(
-                        cmp_file_name,
-                        final_hash,
-                        repos,
-                        self.real_cfg_file,
-                        scripts_duration,
-                        True,
-                        info
-                    )
-                    self.is_just_updated = True
+                if not inst_scripts or len(inst_scripts) == 0:
+                    print(f"Nothing to run for {cmp_name}: install-scripts is empty or missing")
                 else:
-                    return scripts_res
+                    scripts_res, scripts_duration = self._run_scripts(update_scripts)
+                    print(f"Update of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
+                    if scripts_res == 0:
+                        info = self._save_installation_info(
+                            cmp_file_name,
+                            final_hash,
+                            repos,
+                            self.real_cfg_file,
+                            scripts_duration,
+                            True,
+                            info
+                        )
+                        self.is_just_updated = True
+                    else:
+                        return scripts_res
         if self.args.changelog and (self.is_just_installed or self.is_just_updated):
             # Changelog must be executed before updating to the newest version
             cmp_changelog_file_path = os.path.join(store_dir, f"{cmp_name_slug}_changelog.yml")
