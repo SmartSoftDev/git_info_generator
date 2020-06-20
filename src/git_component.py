@@ -339,7 +339,7 @@ class GitComponent:
                     print(f"Repo={repo} with "
                           f"repo_commit={info['current_version']['repos'].get(repo,'')[:8]} -> {repo_hash[:8]}")
                 update_scripts = self.file.get("update-scripts", [])
-                if not inst_scripts or len(inst_scripts) == 0:
+                if not update_scripts or len(update_scripts) == 0:
                     print(f"Nothing to run for {cmp_name}: install-scripts is empty or missing")
                 else:
                     scripts_res, scripts_duration = self._run_scripts(update_scripts)
