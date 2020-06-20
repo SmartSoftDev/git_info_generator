@@ -57,15 +57,18 @@ def args_parse():
                         help='Path to the yaml config file, or directory where .git_component.yml (default=.)')
     parser.add_argument('-l', '--limit', action='store', type=int, default=65,
                         help='limit the size of hash (default=65)')
+    parser.add_argument('-U', '--unittest-check', action='store_true', default=None,
+                        help='Run component unittest scripts before installing or updating')
     parser.add_argument('-i', '--install-check', action='store_true', default=None,
                         help='Run component install scripts if it was not installed before')
     parser.add_argument('-u', '--update-check', action='store_true', default=None,
                         help='Run component update scripts if it is detected that the component changed')
+    parser.add_argument('-I', '--integration-test', action='store_true', default=None,
+                        help='Run component integration test scripts if it was installed or updated')
     parser.add_argument('-C', '--changelog', action='store_true', default=None,
                         help='Generate changelog from git history.')
-    parser.add_argument('-f', '--from-commit', action='store', type=str, default=None,
-                        help='Changelog from this commit. '
-                             'Commit hash or list of git-remote-url!commit-hash,git-remote-url!commit-hash,... ')
+    parser.add_argument('-F', '--check-changes-from-commit', action='store', type=str, default=None,
+                        help='It will check if from that commit are changes.')
     parser.add_argument('-s', '--store-path', action='store', type=str, default=None,
                         help='path to the directory to store current installation status for the components '
                         '(default=/etc/_git_components/')
@@ -219,20 +222,7 @@ class GitComponent:
         if not isinstance(locations, list):
             raise self.GitComponentException("'locations' field from config file MUST be a list!")
 
-        self._debug(f"git-hashes:")
-        cmp_name = self.file.get("name")
-        if not cmp_name:
-            raise self.GitComponentException("'name' field is missing")
-        # we need to need to check the install or/and update scripts
-        store_dir = '/etc/_git_components/'
-        if self.args.user:
-            store_dir = os.path.join(os.getenv('HOME'), ".git_components")
-        if self.args.store_path:
-            store_dir = self.args.store_path
-        if not os.path.exists(store_dir):
-            os.makedirs(store_dir)
-        cmp_name_slug = slugify(cmp_name)
-        cmp_file_name = os.path.join(store_dir, f"{cmp_name_slug}.yml")
+        # validate locations
         for loc in locations:
             if not isinstance(loc, (int, float, str)):
                 raise self.GitComponentException(f"location={loc} is not a string!")
@@ -243,7 +233,52 @@ class GitComponent:
             if os.path.isabs(loc):
                 raise self.GitComponentException(
                     f"location={loc} is ABSOLUTE (only relative paths are allowed)")
+        # validate the name
+        cmp_name = self.file.get("name")
+        if not cmp_name:
+            raise self.GitComponentException("'name' field is missing")
 
+        if self.args.check_changes_from_commit:
+            # let's check if there are changes since this commit
+            commit = self.args.check_changes_from_commit
+            changes = False
+            for loc in locations:
+                loc = os.path.join(self.cwd, loc)
+                cmd = ["git", "diff", "--name-only", commit, "--", loc]
+                resp = subprocess.check_output(cmd, cwd=self.cwd).decode("utf-8").strip()
+                if len(resp):
+                    changes = True
+                    print(f"In component {cmp_name} changes are DETECTED! From commit={commit}")
+                    break
+            if not changes:
+                return 0
+        if self.args.unittest_check:
+            inst_scripts = self.file.get("unittest-scripts", [])
+            if not inst_scripts or len(inst_scripts) == 0:
+                print("Nothing to run: install-scripts is empty or missing")
+            else:
+                scripts_res, install_duration = self._run_scripts(inst_scripts)
+                print(f"Unittest of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
+                if scripts_res != 0:
+                    return scripts_res
+
+        if not (self.args.install_check or self.args.update_check):
+            # if there is no update or install then we just stop here
+            return 0
+        # validate config files
+
+        # we need to need to check the install or/and update scripts
+        store_dir = '/etc/_git_components/'
+        if self.args.user:
+            store_dir = os.path.join(os.getenv('HOME'), ".git_components")
+        if self.args.store_path:
+            store_dir = self.args.store_path
+        if not os.path.exists(store_dir):
+            os.makedirs(store_dir)
+        cmp_name_slug = slugify(cmp_name)
+        cmp_file_name = os.path.join(store_dir, f"{cmp_name_slug}.yml")
+
+        self._debug(f"git-hashes:")
         # we MUST always sort the locations so that the result does not change when the order is different
         locations = sorted(locations)
         hashes = []
@@ -252,7 +287,7 @@ class GitComponent:
             cmd = ["git", "log", "-n1", '--format=%H', "--", loc]
             resp = subprocess.check_output(cmd, cwd=self.cwd).decode("utf-8").strip()
             if len(resp) == 0:
-                raise self.GitComponentException(f"Could not get git has from {loc}, is it under git control?")
+                raise self.GitComponentException(f"Could not get git hash from {loc}, is it under git control?")
             self._debug(f"\t{loc} {resp!s}")
             hashes.append(resp)
         final_hash = None
