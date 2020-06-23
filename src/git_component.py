@@ -262,72 +262,71 @@ class GitComponent:
                 if scripts_res != 0:
                     return scripts_res
 
-        if not (self.args.install_check or self.args.update_check):
+        if self.args.install_check or self.args.update_check:
             # if there is no update or install then we just stop here
-            return 0
-        # validate config files
+            # validate config files
 
-        # we need to need to check the install or/and update scripts
-        store_dir = '/etc/_git_components/'
-        if self.args.user:
-            store_dir = os.path.join(os.getenv('HOME'), ".git_components")
-        if self.args.store_path:
-            store_dir = self.args.store_path
-        if not os.path.exists(store_dir):
-            os.makedirs(store_dir)
-        cmp_name_slug = slugify(cmp_name)
-        cmp_file_name = os.path.join(store_dir, f"{cmp_name_slug}.yml")
+            # we need to need to check the install or/and update scripts
+            store_dir = '/etc/_git_components/'
+            if self.args.user:
+                store_dir = os.path.join(os.getenv('HOME'), ".git_components")
+            if self.args.store_path:
+                store_dir = self.args.store_path
+            if not os.path.exists(store_dir):
+                os.makedirs(store_dir)
+            cmp_name_slug = slugify(cmp_name)
+            cmp_file_name = os.path.join(store_dir, f"{cmp_name_slug}.yml")
 
-        self._debug(f"git-hashes:")
-        # we MUST always sort the locations so that the result does not change when the order is different
-        locations = sorted(locations)
-        hashes = []
-        for loc in locations:
-            loc = os.path.join(self.cwd, loc)
-            cmd = ["git", "log", "-n1", '--format=%H', "--", loc]
-            resp = subprocess.check_output(cmd, cwd=self.cwd).decode("utf-8").strip()
-            if len(resp) == 0:
-                raise self.GitComponentException(f"Could not get git hash from {loc}, is it under git control?")
-            self._debug(f"\t{loc} {resp!s}")
-            hashes.append(resp)
-        final_hash = None
-        if len(hashes) == 0:
-            raise self.GitComponentException("There are no valid locations to get the hash")
-        elif len(hashes) == 1:
-            final_hash = hashes[0]
-        else:
-            hasher = hashlib.sha256()
-            for line in hashes:
-                hasher.update(line.encode('utf-8'))
-            final_hash = hasher.hexdigest()
-        print(final_hash[:self.args.limit])
-
-        info = self._load_installation_info(cmp_file_name)
-
-        if self.args.install_check and not info:
-            # we must run first the install, only then changelog
-            print(f"component {cmp_name} must be installed ...")
-            repos = self._get_repo_hash(locations)
-            for repo, repo_hash in repos.items():
-                print(f"Repo={repo} with repo_commit={repo_hash}")
-
-            inst_scripts = self.file.get("install-scripts", [])
-            if not inst_scripts or len(inst_scripts) == 0:
-                print(f"Nothing to run for {cmp_name}: install-scripts is empty or missing")
+            self._debug(f"git-hashes:")
+            # we MUST always sort the locations so that the result does not change when the order is different
+            locations = sorted(locations)
+            hashes = []
+            for loc in locations:
+                loc = os.path.join(self.cwd, loc)
+                cmd = ["git", "log", "-n1", '--format=%H', "--", loc]
+                resp = subprocess.check_output(cmd, cwd=self.cwd).decode("utf-8").strip()
+                if len(resp) == 0:
+                    raise self.GitComponentException(f"Could not get git hash from {loc}, is it under git control?")
+                self._debug(f"\t{loc} {resp!s}")
+                hashes.append(resp)
+            final_hash = None
+            if len(hashes) == 0:
+                raise self.GitComponentException("There are no valid locations to get the hash")
+            elif len(hashes) == 1:
+                final_hash = hashes[0]
             else:
-                scripts_res, install_duration = self._run_scripts(inst_scripts)
-                print(f"Installation of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
-                if scripts_res == 0:
-                    info = self._save_installation_info(
-                        cmp_file_name,
-                        final_hash,
-                        repos,
-                        self.real_cfg_file,
-                        install_duration
-                    )
-                    self.is_just_installed = True
+                hasher = hashlib.sha256()
+                for line in hashes:
+                    hasher.update(line.encode('utf-8'))
+                final_hash = hasher.hexdigest()
+            print(final_hash[:self.args.limit])
+
+            info = self._load_installation_info(cmp_file_name)
+
+            if self.args.install_check and not info:
+                # we must run first the install, only then changelog
+                print(f"component {cmp_name} must be installed ...")
+                repos = self._get_repo_hash(locations)
+                for repo, repo_hash in repos.items():
+                    print(f"Repo={repo} with repo_commit={repo_hash}")
+
+                inst_scripts = self.file.get("install-scripts", [])
+                if not inst_scripts or len(inst_scripts) == 0:
+                    print(f"Nothing to run for {cmp_name}: install-scripts is empty or missing")
                 else:
-                    return scripts_res
+                    scripts_res, install_duration = self._run_scripts(inst_scripts)
+                    print(f"Installation of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
+                    if scripts_res == 0:
+                        info = self._save_installation_info(
+                            cmp_file_name,
+                            final_hash,
+                            repos,
+                            self.real_cfg_file,
+                            install_duration
+                        )
+                        self.is_just_installed = True
+                    else:
+                        return scripts_res
 
         if self.args.update_check and info and not self.is_just_installed:
             if info['current_version']['hash'] == final_hash:
@@ -425,6 +424,15 @@ class GitComponent:
                 with open(cmp_changelog_file_path, "w+") as f:
                     yaml.safe_dump(old_changelog_info, f)
 
+        if self.args.integration_test:
+            inst_scripts = self.file.get("integration-scripts", [])
+            if not inst_scripts or len(inst_scripts) == 0:
+                print(f"Nothing to run for {cmp_name}: integration-scripts is empty or missing")
+            else:
+                scripts_res, install_duration = self._run_scripts(inst_scripts)
+                print(f"Integration tests of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
+                if scripts_res != 0:
+                    return scripts_res
 
         return 0
 
