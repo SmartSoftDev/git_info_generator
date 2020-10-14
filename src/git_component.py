@@ -117,10 +117,10 @@ class GitComponent:
         start_time = timer()
         for script in scripts:
             i += 1
-            print(f"Running {i} of {len(scripts)}: {script!r} =====================================")
+            print(f"Running {i} of {len(scripts)}: {script!r}")
             sys.stdout.flush()
             script_res = subprocess.run(script, shell=True, cwd=self.cwd)
-            print("=====================================")
+            print(f"End of {len(scripts)}: {script!r} <-------------------")
             sys.stdout.flush()
             if script_res.returncode != 0:
                 print(f"Error: returncode={script_res.returncode} when running {script!r}")
@@ -215,7 +215,6 @@ class GitComponent:
             print(txt)
 
     def run(self):
-
         locations = self.file.get("locations")
         if not locations:
             raise self.GitComponentException("Config file has no 'locations' list!")
@@ -237,6 +236,7 @@ class GitComponent:
         cmp_name = self.file.get("name")
         if not cmp_name:
             raise self.GitComponentException("'name' field is missing")
+        print(f"Processing {cmp_name!r}")
 
         if self.args.check_changes_from_commit:
             # let's check if there are changes since this commit
