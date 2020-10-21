@@ -13,7 +13,6 @@ https://github.com/SmartSoftDev/git_info_genarator
 """
 
 import os
-import datetime
 import argparse
 import re
 import yaml
@@ -107,7 +106,7 @@ def args_pars():
                         help='sets path to the git_component store to $HOME/.git_components/')
     parser.add_argument('-s', '--store-path', action='store', type=str, default=None,
                         help='path to the git_component store (where changelog file is located)'
-                        '(default=/etc/_git_components/')
+                             '(default=/etc/_git_components/')
     return parser.parse_args()
 
 

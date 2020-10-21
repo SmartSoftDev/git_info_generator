@@ -65,6 +65,8 @@ def args_parse():
                         help='Run component update scripts if it is detected that the component changed')
     parser.add_argument('-I', '--integration-test', action='store_true', default=None,
                         help='Run component integration test scripts if it was installed or updated')
+    parser.add_argument('-E', '--e2e-test', action='store_true', default=None,
+                        help='Run component end to end test scripts if it was installed or updated')
     parser.add_argument('-C', '--changelog', action='store_true', default=None,
                         help='Generate changelog from git history.')
     parser.add_argument('-F', '--check-changes-from-commit', action='store', type=str, default=None,
@@ -405,10 +407,10 @@ class GitComponent:
                     commits = self._parse_commits(resp)
                     print(f"Got {len(commits)} commits")
                     for commit in commits:
-                        hash = commit.get("hash")
-                        if hash in unique_commit_hash:
+                        _hash = commit.get("hash")
+                        if _hash in unique_commit_hash:
                             continue  # already added
-                        unique_commit_hash.append(hash)
+                        unique_commit_hash.append(_hash)
                         if repo not in changelog:
                             changelog[repo] = []
                         changelog[repo].append(commit)
@@ -430,7 +432,17 @@ class GitComponent:
                 print(f"Nothing to run for {cmp_name}: integration-scripts is empty or missing")
             else:
                 scripts_res, install_duration = self._run_scripts(inst_scripts)
-                print(f"Integration tests of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
+                print(f"Integration tests of component={cmp_name!r} has "
+                      f"{'succeeded' if scripts_res == 0 else 'FAILED'}")
+                if scripts_res != 0:
+                    return scripts_res
+        if self.args.e2e_test:
+            inst_scripts = self.file.get("e2e-scripts", [])
+            if not inst_scripts or len(inst_scripts) == 0:
+                print(f"Nothing to run for {cmp_name}: e2e-scripts is empty or missing")
+            else:
+                scripts_res, install_duration = self._run_scripts(inst_scripts)
+                print(f"E2e tests of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
                 if scripts_res != 0:
                     return scripts_res
 
