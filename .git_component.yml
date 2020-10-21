@@ -1,0 +1,7 @@
+locations:
+  - .
+name: git_info_generator
+install-scripts:
+  - scripts/install.sh
+update-scripts:
+  - scripts/install.sh
