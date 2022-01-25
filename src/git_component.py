@@ -32,20 +32,119 @@ update-script:  # list of scripts to run when the component needs update
 
 NOTE: if you have ideas how to improve this script just create an issue on https://github.com/SmartSoftDev/GBashLib
 """
-import sys
-import os
-import datetime
 import argparse
-import subprocess
+import datetime
 import hashlib
-import yaml
+import json
+import os
 import re
-
+import shutil
+import subprocess
+import sys
+import uuid
 from timeit import default_timer as timer
+from typing import Union, List
+
+import yaml
+
+# equivalent to [^a-zA-Z0-9]
+NON_ALPHANUM_PATTERN = re.compile(r'[\W_]+')
+CHUNK_SIZE = 4096
 
 
 def slugify(text):
-    return re.sub(r'[\W_]+', '-', text)
+    return NON_ALPHANUM_PATTERN.sub('-', text)
+
+
+def gen_random_hash():
+    return uuid.uuid4().hex
+
+
+def write_cfg_file(file_path, data, human_readable=False):
+    """writes json file.
+    NOTE: it will always write in an atomic manner (first write to tmp file then move it to destination
+    when writing configuration files is IMPORTANT to protect against powerOFF events and do not leave the CFG file
+    half written.
+    """
+
+    tmp_file_path = file_path + ".tmp"
+    with open(tmp_file_path, "w+") as f:
+        json.dump(data, f, indent=2 if human_readable else None)
+        f.flush()
+        os.fsync(f.fileno())
+    # rename should be atomic operation
+    os.rename(tmp_file_path, file_path)
+    # still we would like to sync the hole parent directory.
+    dir_name = os.path.dirname(file_path)
+    if not dir_name:
+        dir_name = '.'
+    dir_fd = os.open(dir_name, os.O_DIRECTORY | os.O_CLOEXEC)
+    os.fsync(dir_fd)
+    os.close(dir_fd)
+
+
+def compute_check_sums(_file):
+    with open(_file, mode="rb", buffering=0) as fp:
+        md5_hash_func = hashlib.md5()
+        sha256_hash_func = hashlib.sha256()
+        buffer = fp.read(CHUNK_SIZE)
+        while len(buffer) > 0:
+            md5_hash_func.update(buffer)
+            sha256_hash_func.update(buffer)
+            buffer = fp.read(CHUNK_SIZE)
+    return sha256_hash_func.digest().hex(), md5_hash_func.digest().hex()
+
+
+def create_package(_package_type: str, version: str, _src_dir: str, _out_file: str = None) -> None:
+    package_name = _out_file or _src_dir.split("/")[-1]
+    os.chdir(_src_dir)
+    if _package_type == "tgz":
+        package_file = shutil.make_archive(package_name, 'gztar', root_dir=_src_dir)
+    elif _package_type == "zip":
+        package_file = shutil.make_archive(package_name, 'zip', root_dir=_src_dir)
+    else:
+        raise NotImplemented()
+    sha256_check_sum, md5_check_sum = compute_check_sums(package_file)
+    data = {"version": version,
+            "sha256sum": sha256_check_sum,
+            "md5sum": md5_check_sum,
+            "file_name": os.path.basename(package_file),
+            "package_type": _package_type}
+    write_cfg_file(os.path.join(_src_dir, "info.json"), data, human_readable=True)
+
+
+def get_last_tag(cwd, _filter: str) -> Union[None, str]:
+    """get last tag for some specific component"""
+    cmd = ["git", "tag", "--list", _filter, "--merged"]
+    tags = []
+    try:
+        tags = subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError:
+        print(f"Found no tags for {_filter} pattern.")
+    if tags:
+        return tags[-1]
+    return
+
+
+def compose_build_commit_hash(cwd, tag, files: List) -> str:
+    commits_hashes = []
+    if tag:
+        # get all commits hashes from last tag until head
+        cmd = ["git", "log", "--format=%h", f"{tag}..HEAD", "--oneline", "--", *files]
+    else:
+        cmd = cmd = ["git", "log", "--format=%h", "--", *files]
+    try:
+        commits_hashes = subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError:
+        pass
+    if commits_hashes:
+        commits_hashes = commits_hashes.decode().strip().split("\n")
+    changes_count = len(commits_hashes)
+    build_commit_hash = f"{changes_count}"
+    if changes_count > 0:
+        # creates build_commit_hash with git short hash ex: "20-65ecc13"
+        build_commit_hash += f"-{commits_hashes[-1]}"
+    return build_commit_hash
 
 
 def args_parse():
@@ -57,25 +156,36 @@ def args_parse():
                         help='Path to the yaml config file, or directory where .git_component.yml (default=.)')
     parser.add_argument('-l', '--limit', action='store', type=int, default=65,
                         help='limit the size of hash (default=65)')
-    parser.add_argument('-U', '--unittest-check', action='store_true', default=None,
-                        help='Run component unittest scripts before installing or updating')
     parser.add_argument('-i', '--install-check', action='store_true', default=None,
                         help='Run component install scripts if it was not installed before')
     parser.add_argument('-u', '--update-check', action='store_true', default=None,
                         help='Run component update scripts if it is detected that the component changed')
-    parser.add_argument('-I', '--integration-test', action='store_true', default=None,
-                        help='Run component integration test scripts if it was installed or updated')
-    parser.add_argument('-E', '--e2e-test', action='store_true', default=None,
-                        help='Run component end to end test scripts if it was installed or updated')
     parser.add_argument('-C', '--changelog', action='store_true', default=None,
                         help='Generate changelog from git history.')
     parser.add_argument('-F', '--check-changes-from-commit', action='store', type=str, default=None,
                         help='It will check if from that commit are changes.')
     parser.add_argument('-s', '--store-path', action='store', type=str, default=None,
                         help='path to the directory to store current installation status for the components '
-                        '(default=/etc/_git_components/')
+                             '(default=/etc/_git_components/)')
     parser.add_argument('--user', action='store_true', default=None,
                         help='sets path to installation status store to $HOME/.git_components/')
+
+    subparsers = parser.add_subparsers(title="Sub commands")
+    sp = subparsers.add_parser("run_tests", help="Run tests.")
+    sp.set_defaults(cmd="run_tests")
+    sp.add_argument('-U', '--unittest-check', action='store_true', default=None,
+                    help='Run component unittest scripts before installing or updating.')
+    sp.add_argument('-I', '--integration-check', action='store_true', default=None,
+                    help='Run component integration scripts after installing or updating')
+    sp.add_argument('-E', '--e2e-check', action='store_true', default=None,
+                    help='Run component end to end scripts after installing or updating')
+
+    sp = subparsers.add_parser("pack", help="Create install package.")
+    sp.set_defaults(cmd="pack")
+    sp.add_argument('-s', '--store-path', action='store', type=str, default=None,
+                    help='path to the directory to create new package (default=/tmp/randomHash')
+    sp.add_argument('-t', '--package_type', type=str, choices=['tgz', 'deb', 'zip', 'rpm'],
+                    help='Creates package of type.')
 
     return parser.parse_args()
 
@@ -115,7 +225,6 @@ class GitComponent:
     def _run_scripts(self, scripts):
         i = 0
         res = 0
-        res_ret_code = 0
         start_time = timer()
         for script in scripts:
             i += 1
@@ -125,11 +234,11 @@ class GitComponent:
             print(f"End of {len(scripts)}: {script!r} <-------------------")
             sys.stdout.flush()
             if script_res.returncode != 0:
-                print(f"Error: returncode={script_res.returncode} when running {script!r}")
+                print(f"Error: return code={script_res.returncode} when running {script!r}")
                 res = script_res.returncode
                 break
         end_time = timer()
-        return res, round(end_time-start_time, 3)
+        return res, round(end_time - start_time, 3)
 
     def _recursive_dict_update(self, d, u):
         for k, v in u.items():
@@ -195,6 +304,14 @@ class GitComponent:
             })
         return res
 
+    def __get_component_field(self, field):
+        component_field = self.file.get(field)
+        if not component_field:
+            raise self.GitComponentException(f"Config file has no '{field}' list!")
+        if not isinstance(component_field, list):
+            raise self.GitComponentException(f"'{field}' field from config file MUST be a list!")
+        return component_field
+
     def __init__(self, args):
         self.args = args
         cfg_file = self.DEF_CMP_FILE_NAME
@@ -217,11 +334,7 @@ class GitComponent:
             print(txt)
 
     def run(self):
-        locations = self.file.get("locations")
-        if not locations:
-            raise self.GitComponentException("Config file has no 'locations' list!")
-        if not isinstance(locations, list):
-            raise self.GitComponentException("'locations' field from config file MUST be a list!")
+        locations = self.__get_component_field("locations")
 
         # validate locations
         for loc in locations:
@@ -254,15 +367,6 @@ class GitComponent:
                     break
             if not changes:
                 return 0
-        if self.args.unittest_check:
-            inst_scripts = self.file.get("unittest-scripts", [])
-            if not inst_scripts or len(inst_scripts) == 0:
-                print(f"Nothing to run for {cmp_name}: unittest-scripts is empty or missing")
-            else:
-                scripts_res, install_duration = self._run_scripts(inst_scripts)
-                print(f"Unittest of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
-                if scripts_res != 0:
-                    return scripts_res
 
         if self.args.install_check or self.args.update_check:
             # if there is no update or install then we just stop here
@@ -338,7 +442,7 @@ class GitComponent:
                 repos = self._get_repo_hash(locations)
                 for repo, repo_hash in repos.items():
                     print(f"Repo={repo} with "
-                          f"repo_commit={info['current_version']['repos'].get(repo,'')[:8]} -> {repo_hash[:8]}")
+                          f"repo_commit={info['current_version']['repos'].get(repo, '')[:8]} -> {repo_hash[:8]}")
                 update_scripts = self.file.get("update-scripts", [])
                 if not update_scripts or len(update_scripts) == 0:
                     print(f"Nothing to run for {cmp_name}: install-scripts is empty or missing")
@@ -426,27 +530,67 @@ class GitComponent:
                 with open(cmp_changelog_file_path, "w+") as f:
                     yaml.safe_dump(old_changelog_info, f)
 
-        if self.args.integration_test:
-            inst_scripts = self.file.get("integration-scripts", [])
-            if not inst_scripts or len(inst_scripts) == 0:
-                print(f"Nothing to run for {cmp_name}: integration-scripts is empty or missing")
-            else:
-                scripts_res, install_duration = self._run_scripts(inst_scripts)
-                print(f"Integration tests of component={cmp_name!r} has "
-                      f"{'succeeded' if scripts_res == 0 else 'FAILED'}")
-                if scripts_res != 0:
-                    return scripts_res
-        if self.args.e2e_test:
-            inst_scripts = self.file.get("e2e-scripts", [])
-            if not inst_scripts or len(inst_scripts) == 0:
-                print(f"Nothing to run for {cmp_name}: e2e-scripts is empty or missing")
-            else:
-                scripts_res, install_duration = self._run_scripts(inst_scripts)
-                print(f"E2e tests of component={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
-                if scripts_res != 0:
-                    return scripts_res
+        cmd = getattr(self.args, 'cmd', None)
+        if cmd:
+            if cmd == "run_tests":
+                for tests_type in ["unittest", "integration", "e2e"]:
+                    if getattr(self.args, f"{tests_type}_check"):
+                        inst_scripts = self.file.get(f"{tests_type}-scripts", [])
+                        if not inst_scripts or len(inst_scripts) == 0:
+                            print(f"Nothing to run for {cmp_name}: {tests_type}-scripts is empty or missing")
+                        else:
+                            scripts_res, install_duration = self._run_scripts(inst_scripts)
+                            print(f"{tests_type.capitalize()} of component={cmp_name!r} has "
+                                  f"{'succeeded' if scripts_res == 0 else 'FAILED'}")
+                            if scripts_res != 0:
+                                return scripts_res
+            elif cmd == "pack":
+                store_dir = f'/tmp/{gen_random_hash()}'
+                if self.args.store_path:
+                    store_dir = os.path.abspath(self.args.store_path)
+                if not os.path.exists(store_dir):
+                    os.makedirs(store_dir)
+                location_root = self.file.get("location_root")
+                if not location_root:
+                    raise self.GitComponentException(f"Config file has no location_root='{location_root}'!")
+                prefix = self.file.get("prefix", self.file['name'])
+                bin_files = self.__get_component_field("bin_files")
 
-        return 0
+                last_tag = get_last_tag(self.cwd, _filter=prefix)
+                build_commit_hash = compose_build_commit_hash(self.cwd, last_tag, locations)
+                package_label = f"{prefix}{last_tag or '0.0.1'}.{build_commit_hash}"
+                package_version = f"{last_tag or '0.0.1'}.{build_commit_hash}"
+                package_dir = os.path.join(store_dir, package_label)
+                os.makedirs(package_dir, exist_ok=True)
+                src_dir = os.path.join(package_dir, "src")
+                os.makedirs(src_dir, exist_ok=True)
+                # validate bin_files
+                for bin_file in bin_files:
+                    if isinstance(bin_file, str):
+                        shutil.copy(os.path.join(self.cwd, location_root, bin_file),
+                                    src_dir)
+                    elif isinstance(bin_file, dict):
+                        if not set(bin_file.keys()).issubset({'src', 'dst'}):
+                            raise self.GitComponentException(f"bin_file={bin_file} should "
+                                                             f"have two keys 'src' and 'dst'!")
+                        if any(not isinstance(v, str) for v in bin_file.values()):
+                            raise self.GitComponentException(f"bin_file={bin_file} values should be strings!")
+                        shutil.copy(os.path.join(self.cwd, location_root, bin_file['src']),
+                                    os.path.join(src_dir, bin_file['dst']))
+                    else:
+                        raise self.GitComponentException(f"bin_file={bin_file} is not a string or dict!")
+
+                for loc in locations:
+                    loc_path = os.path.join(self.cwd, location_root, loc)
+                    if os.path.isfile(loc_path):
+                        os.makedirs(os.path.join(src_dir, os.path.dirname(loc)), exist_ok=True)
+                        shutil.copy(loc_path, os.path.join(src_dir, loc))
+
+                os.makedirs(os.path.join(package_dir, "cfg"), exist_ok=True)
+                os.makedirs(os.path.join(package_dir, "scripts"), exist_ok=True)
+                if self.args.package_type:
+                    create_package(self.args.package_type, package_version, package_dir)
+                return 0
 
 
 if __name__ == "__main__":
