@@ -25,10 +25,17 @@ locations:
   - relative/path/directory1
   - relative/path2/file1
 name: AppName
+prefix: package prefix
 install-scripts: # list of scripts to run when the component needs installation
   - bash script
 update-script:  # list of scripts to run when the component needs update
   - bash script
+location_root:  from where to start to copy locations
+bin_files:  # list of files(or dict like below) to include into destination root directory
+    - some file
+    -
+        src: some_path/bin.py
+        dst: main.py
 
 NOTE: if you have ideas how to improve this script just create an issue on https://github.com/SmartSoftDev/GBashLib
 """
@@ -128,11 +135,10 @@ def get_last_tag(cwd, _filter: str) -> Union[None, str]:
 
 def compose_build_commit_hash(cwd, tag, files: List) -> str:
     commits_hashes = []
+    cmd = ["git", "log", "--format=%h", "--", *files]
     if tag:
         # get all commits hashes from last tag until head
         cmd = ["git", "log", "--format=%h", f"{tag}..HEAD", "--oneline", "--", *files]
-    else:
-        cmd = cmd = ["git", "log", "--format=%h", "--", *files]
     try:
         commits_hashes = subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError:
@@ -223,11 +229,9 @@ class GitComponent:
         return repos
 
     def _run_scripts(self, scripts):
-        i = 0
         res = 0
         start_time = timer()
-        for script in scripts:
-            i += 1
+        for i, script in enumerate(scripts, 1):
             print(f"Running {i} of {len(scripts)}: {script!r}")
             sys.stdout.flush()
             script_res = subprocess.run(script, shell=True, cwd=self.cwd)
