@@ -25,14 +25,18 @@ locations:
   - relative/path/directory1
   - relative/path2/file1
 name: AppName
-prefix: package prefix
+git_tag_prefix: tag prefix to look for latest version, default ""
+package-actions:
+  install: path_to_install_script
+  update: path_to_update_script
+  uninstall: path_uinstall_script
 install-scripts: # list of scripts to run when the component needs installation
   - bash script
 update-script:  # list of scripts to run when the component needs update
   - bash script
 location_root:  from where to start to copy locations
-bin_files:  # list of files(or dict like below) to include into destination root directory
-    - some file
+bin_files:  # list of files(or dict like below) to include into destination root of the package
+    - some/path/to/bin/file.py  # then the file.py will be copied to root of the package
     -
         src: some_path/bin.py
         dst: main.py
@@ -51,6 +55,7 @@ import sys
 import uuid
 from timeit import default_timer as timer
 from typing import Union, List
+from numpy import isin
 
 import yaml
 
@@ -133,23 +138,24 @@ def get_last_tag(cwd, _filter: str) -> Union[None, str]:
     return
 
 
-def compose_build_commit_hash(cwd, tag, files: List) -> str:
+def compose_build_commit_hash(cwd, tag, files: List, hash_limit=7) -> str:
     commits_hashes = []
     cmd = ["git", "log", "--format=%h", "--", *files]
     if tag:
         # get all commits hashes from last tag until head
-        cmd = ["git", "log", "--format=%h", f"{tag}..HEAD", "--oneline", "--", *files]
+        cmd = ["git", "log", "--format=%h", f"{tag}..HEAD", "--", *files]
     try:
         commits_hashes = subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError:
         pass
     if commits_hashes:
-        commits_hashes = commits_hashes.decode().strip().split("\n")
+        commits_hashes = [c.strip() for c in commits_hashes.decode().strip().split("\n") if c.strip()]
     changes_count = len(commits_hashes)
-    build_commit_hash = f"{changes_count}"
+    # the build_commit_hash: -20-65ecc13
+    build_commit_hash = f"-{changes_count}"
     if changes_count > 0:
         # creates build_commit_hash with git short hash ex: "20-65ecc13"
-        build_commit_hash += f"-{commits_hashes[-1]}"
+        build_commit_hash += f"-{commits_hashes[-1][:hash_limit]}"
     return build_commit_hash
 
 
@@ -189,7 +195,7 @@ def args_parse():
     sp = subparsers.add_parser("pack", help="Create install package.")
     sp.set_defaults(cmd="pack")
     sp.add_argument('-s', '--store-path', action='store', type=str, default=None,
-                    help='path to the directory to create new package (default=/tmp/randomHash')
+                    help='path to the directory to create new package (default=/tmp/gig-randomHash)')
     sp.add_argument('-t', '--package_type', type=str, choices=['tgz', 'deb', 'zip', 'rpm'],
                     help='Creates package of type.')
 
@@ -308,13 +314,27 @@ class GitComponent:
             })
         return res
 
-    def __get_component_field(self, field):
-        component_field = self.file.get(field)
-        if not component_field:
+    def __get_location_list(self, field, default_value=None):
+        component_field = self.file.get(field, default_value)
+        if component_field is None:
             raise self.GitComponentException(f"Config file has no '{field}' list!")
         if not isinstance(component_field, list):
             raise self.GitComponentException(f"'{field}' field from config file MUST be a list!")
-        return component_field
+        for el in component_field:
+            if isinstance(el, dict):
+                if not(el.get("src") and el.get("dst")) and not (len(el.get("src")) and len(el.get("dst"))):
+                    raise self.GitComponentException(f"'{field}' must contain list of str or dict with non empty "
+                                                     f"src' and 'dst' keys")
+                if os.path.relpath(el.get("dst"), './').startswith("../"):
+                    raise self.GitComponentException(f"'{field}' contains dst={el.get('dst')} which try to be outside destination directory. looks like atacking ;) ")
+            elif isinstance(el, str):
+                if not len(el):
+                    raise self.GitComponentException(f"'{field}' contains empty strings")
+            else:
+                raise self.GitComponentException(f"'{field}' must contain list of str or dict with non empty "
+                                                 f"'src' and 'dst' keys")
+        path_list = [el.get("src") if isinstance(el, dict) else el for el in component_field]
+        return path_list, component_field
 
     def __init__(self, args):
         self.args = args
@@ -326,8 +346,8 @@ class GitComponent:
                 cfg_file = self.args.config
         if not os.path.exists(cfg_file):
             raise self.GitComponentException('Config file %r NOT found!', cfg_file)
-        self.cwd = os.path.realpath(os.path.dirname(cfg_file))
-        self.real_cfg_file = os.path.realpath(cfg_file)
+        self.cwd = os.path.abspath(os.path.dirname(cfg_file))
+        self.real_cfg_file = os.path.abspath(cfg_file)
         with open(cfg_file, "r") as f:
             self.file = yaml.safe_load(f)
         self.is_just_installed = False
@@ -338,7 +358,7 @@ class GitComponent:
             print(txt)
 
     def run(self):
-        locations = self.__get_component_field("locations")
+        locations, full_locations = self.__get_location_list("locations")
 
         # validate locations
         for loc in locations:
@@ -446,7 +466,7 @@ class GitComponent:
                 repos = self._get_repo_hash(locations)
                 for repo, repo_hash in repos.items():
                     print(f"Repo={repo} with "
-                          f"repo_commit={info['current_version']['repos'].get(repo, '')[:8]} -> {repo_hash[:8]}")
+                          f"repo_commit={info['current_version']['repos'].get(repo, '')[:self.args.limit]} -> {repo_hash[:self.args.limit]}")
                 update_scripts = self.file.get("update-scripts", [])
                 if not update_scripts or len(update_scripts) == 0:
                     print(f"Nothing to run for {cmp_name}: install-scripts is empty or missing")
@@ -549,49 +569,113 @@ class GitComponent:
                             if scripts_res != 0:
                                 return scripts_res
             elif cmd == "pack":
-                store_dir = f'/tmp/{gen_random_hash()}'
+                # first run some scripts to prepare the package internally
+                package_scripts = self.file.get("package-scripts", [])
+                if not package_scripts or not len(package_scripts):
+                    self._debug(f"Nothing to run for {cmp_name}: package_scripts is empty or missing")
+                else:
+                    scripts_res, install_duration = self._run_scripts(inst_scripts)
+                    print(f"package_scripts={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
+
+
+                store_dir = f'/tmp/gig_{gen_random_hash()}'
                 if self.args.store_path:
                     store_dir = os.path.abspath(self.args.store_path)
                 if not os.path.exists(store_dir):
                     os.makedirs(store_dir)
+                self._debug(f"package tmp dir:{store_dir}")
                 location_root = self.file.get("location_root")
                 if not location_root:
-                    raise self.GitComponentException(f"Config file has no location_root='{location_root}'!")
-                prefix = self.file.get("prefix", self.file['name'])
-                bin_files = self.__get_component_field("bin_files")
+                    location_root = self.cwd
+                prefix = self.file.get("git_tab_prefix", "")
+                bin_files, full_bin_files = self.__get_location_list("bin_files", [])
+                last_tag = get_last_tag(self.cwd, _filter=prefix+"*")  # for git list we need glob *
+                package_scripts = []
+                package_actions = self.file.get("package-actions", {})
+                pack_install = package_actions.get("install")
+                pack_uninstall = package_actions.get("uninstall")
+                pack_update = package_actions.get("update")
+                all_files_to_look = locations + bin_files + [pack_install, pack_update, pack_uninstall]
 
-                last_tag = get_last_tag(self.cwd, _filter=prefix)
-                build_commit_hash = compose_build_commit_hash(self.cwd, last_tag, locations)
-                package_label = f"{prefix}{last_tag or '0.0.1'}.{build_commit_hash}"
-                package_version = f"{last_tag or '0.0.1'}.{build_commit_hash}"
+                if os.path.isabs(location_root):
+                    abs_location_root = location_root
+                else:
+                    abs_location_root = os.path.abspath(os.path.join(self.cwd, location_root))
+                self._debug(f"location root: {abs_location_root}")
+                                # deduplicate
+                build_commit_hash_file_list = []
+                for fpath in all_files_to_look:
+                    fpath = os.path.relpath(os.path.abspath(os.path.join(abs_location_root, fpath)), abs_location_root)
+                    if fpath.startswith("../"):
+                        raise Exception(f"'{fpath}' outside root location")
+                    if fpath not in build_commit_hash_file_list:
+                        build_commit_hash_file_list.append(fpath)
+
+                self._debug(f"check build commit hash on files: {build_commit_hash_file_list}")
+
+                build_commit_hash = compose_build_commit_hash(abs_location_root, last_tag, build_commit_hash_file_list, self.args.limit)
+                package_version = f"{last_tag or '0.0.1'}{build_commit_hash}"
+                package_label = f"{slugify(cmp_name)}_{package_version}"
+
+                self._debug(f"package name:{package_label}")
                 package_dir = os.path.join(store_dir, package_label)
                 os.makedirs(package_dir, exist_ok=True)
                 src_dir = os.path.join(package_dir, "src")
                 os.makedirs(src_dir, exist_ok=True)
-                # validate bin_files
-                for bin_file in bin_files:
-                    if isinstance(bin_file, str):
-                        shutil.copy(os.path.join(self.cwd, location_root, bin_file),
-                                    src_dir)
-                    elif isinstance(bin_file, dict):
-                        if not set(bin_file.keys()).issubset({'src', 'dst'}):
-                            raise self.GitComponentException(f"bin_file={bin_file} should "
-                                                             f"have two keys 'src' and 'dst'!")
-                        if any(not isinstance(v, str) for v in bin_file.values()):
-                            raise self.GitComponentException(f"bin_file={bin_file} values should be strings!")
-                        shutil.copy(os.path.join(self.cwd, location_root, bin_file['src']),
-                                    os.path.join(src_dir, bin_file['dst']))
+
+
+                for fpath in full_bin_files:
+                    src = fpath
+                    dst = None
+                    if isinstance(fpath, dict):
+                        src = fpath.get("src")
+                        dst = fpath.get("dst")
+                    src = os.path.abspath(os.path.join(abs_location_root, src))
+                    if not os.path.isfile(src):
+                        raise Exception(f"bin files = {src} must always be a file!")
+                    src_rel_to_root = os.path.relpath(src, abs_location_root)
+                    if src_rel_to_root.startswith("../"):
+                        raise Exception(f"{loc} is outside location_root={location_root}")
+                    if not dst:
+                        dst = os.path.join(src_dir, src_rel_to_root)
                     else:
-                        raise self.GitComponentException(f"bin_file={bin_file} is not a string or dict!")
+                        dst = os.path.join(src_dir, dst)
+                    self._debug(f"copy bin file:{src} to {dst}")
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.copy(src, dst)
 
-                for loc in locations:
-                    loc_path = os.path.join(self.cwd, location_root, loc)
-                    if os.path.isfile(loc_path):
-                        os.makedirs(os.path.join(src_dir, os.path.dirname(loc)), exist_ok=True)
-                        shutil.copy(loc_path, os.path.join(src_dir, loc))
+                for fpath in full_locations:
+                    src = fpath
+                    dst = None
+                    if isinstance(fpath, dict):
+                        src = fpath.get("src")
+                        dst = fpath.get("dst")
+                    src = os.path.abspath(os.path.join(abs_location_root, src))
+                    src_rel_to_root = os.path.relpath(src, abs_location_root)
+                    if src_rel_to_root.startswith("../"):
+                        raise Exception(f"{loc} is outside location_root={location_root}")
+                    if not dst:
+                        dst = os.path.join(src_dir, src_rel_to_root)
+                    else:
+                        dst = os.path.join(src_dir, dst)
 
-                os.makedirs(os.path.join(package_dir, "cfg"), exist_ok=True)
-                os.makedirs(os.path.join(package_dir, "scripts"), exist_ok=True)
+                    self._debug(f"copy location:{src} to {dst}")
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    if os.path.isfile(src):
+                        shutil.copy(src, dst)
+                    else:
+                        shutil.copytree(src, dst, dirs_exist_ok=True)
+
+
+                pkg_actions_scripts_dir = os.path.join(package_dir, "scripts")
+                os.makedirs(pkg_actions_scripts_dir, exist_ok=True)
+                def _copy_into_scripts(what, where):
+                    if what:
+                        shutil.copy(os.path.join(abs_location_root, what), os.path.join(pkg_actions_scripts_dir, where))
+                _copy_into_scripts(pack_install, 'install')
+                _copy_into_scripts(pack_uninstall, 'uninstall')
+                _copy_into_scripts(pack_update, 'update')
+
                 if self.args.package_type:
                     create_package(self.args.package_type, package_version, package_dir)
                 return 0
