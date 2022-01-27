@@ -21,25 +21,30 @@ git_component_hash that you do not have local changes in the git repositories.
 To ease automation the app will look to .git_component.yml file in current directory.
 
 config file format:
-locations:
-  - relative/path/directory1
-  - relative/path2/file1
 name: AppName
 git_tag_prefix: tag prefix to look for latest version, default ""
-package-actions:
-  install: path_to_install_script
-  update: path_to_update_script
-  uninstall: path_uinstall_script
 install-scripts: # list of scripts to run when the component needs installation
   - bash script
 update-script:  # list of scripts to run when the component needs update
   - bash script
 location_root:  from where to start to copy locations
+locations:
+  - relative/path/directory1
+  - relative/path2/file1
 bin_files:  # list of files(or dict like below) to include into destination root of the package
     - some/path/to/bin/file.py  # then the file.py will be copied to root of the package
     -
         src: some_path/bin.py
         dst: main.py
+package-storage: path to the directory to store newly generated packages (relative or absolute)
+package-archive-type: tgz or zip
+package-info: a json object written to the package info.json file
+package-actions:
+  install: path_to_install_script
+  update: path_to_update_script
+  uninstall: path_uinstall_script
+  other_action: path_to_other_action
+
 
 NOTE: if you have ideas how to improve this script just create an issue on https://github.com/SmartSoftDev/GBashLib
 """
@@ -107,22 +112,26 @@ def compute_check_sums(_file):
     return sha256_hash_func.digest().hex(), md5_hash_func.digest().hex()
 
 
-def create_package(_package_type: str, version: str, _src_dir: str, _out_file: str = None) -> None:
-    package_name = _out_file or _src_dir.split("/")[-1]
-    os.chdir(_src_dir)
+def create_package(info: dict, _package_type: str,  _src_dir: str, keep_storage_dir: bool) -> None:
+    package_name = os.path.basename(_src_dir)
+    root_dir = os.path.dirname(_src_dir)
+    base_dir = os.path.relpath(_src_dir, root_dir)
+    os.chdir(root_dir)
     if _package_type == "tgz":
-        package_file = shutil.make_archive(package_name, 'gztar', root_dir=_src_dir)
+        package_file = shutil.make_archive(package_name, 'gztar', root_dir=root_dir, base_dir=base_dir)
     elif _package_type == "zip":
-        package_file = shutil.make_archive(package_name, 'zip', root_dir=_src_dir)
+        package_file = shutil.make_archive(package_name, 'zip', root_dir=root_dir, base_dir=base_dir)
     else:
         raise NotImplemented()
     sha256_check_sum, md5_check_sum = compute_check_sums(package_file)
-    data = {"version": version,
-            "sha256sum": sha256_check_sum,
+    info.update({"sha256sum": sha256_check_sum,
             "md5sum": md5_check_sum,
             "file_name": os.path.basename(package_file),
-            "package_type": _package_type}
-    write_cfg_file(os.path.join(_src_dir, "info.json"), data, human_readable=True)
+            "package_type": _package_type
+            })
+    write_cfg_file(os.path.join(root_dir, f"{package_file}.info.json"), info, human_readable=True)
+    if not keep_storage_dir:
+        shutil.rmtree(_src_dir)
 
 
 def get_last_tag(cwd, _filter: str) -> Union[None, str]:
@@ -152,9 +161,10 @@ def compose_build_commit_hash(cwd, tag, files: List, hash_limit=7) -> str:
         commits_hashes = [c.strip() for c in commits_hashes.decode().strip().split("\n") if c.strip()]
     changes_count = len(commits_hashes)
     # the build_commit_hash: -20-65ecc13
-    build_commit_hash = f"-{changes_count}"
+    build_commit_hash = ""
     if changes_count > 0:
         # creates build_commit_hash with git short hash ex: "20-65ecc13"
+        build_commit_hash = f"-{changes_count}"
         build_commit_hash += f"-{commits_hashes[-1][:hash_limit]}"
     return build_commit_hash
 
@@ -195,9 +205,12 @@ def args_parse():
     sp = subparsers.add_parser("pack", help="Create install package.")
     sp.set_defaults(cmd="pack")
     sp.add_argument('-s', '--store-path', action='store', type=str, default=None,
-                    help='path to the directory to create new package (default=/tmp/gig-randomHash)')
-    sp.add_argument('-t', '--package_type', type=str, choices=['tgz', 'deb', 'zip', 'rpm'],
-                    help='Creates package of type.')
+                    help='path to the directory to create new package (default=/tmp/gig-randomHash), or package-store field from .git_component.yml')
+    sp.add_argument('-t', '--package_type', type=str, choices=['tgz', 'zip'],
+                    help='Creates package of type (deletes package storage directory).')
+    sp.add_argument('-k', '--keep-storage-dir', action='store_true', default=None,
+                    help='Keep storage directory even if archive package was chosen')
+
 
     return parser.parse_args()
 
@@ -577,8 +590,12 @@ class GitComponent:
                     scripts_res, install_duration = self._run_scripts(inst_scripts)
                     print(f"package_scripts={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
 
-
-                store_dir = f'/tmp/gig_{gen_random_hash()}'
+                store_dir = self.file.get("package-storage", None)
+                if store_dir:
+                    if not os.path.isabs(store_dir):
+                        store_dir = os.path.abspath(os.path.join(self.cwd, store_dir))
+                else:
+                    store_dir = f'/tmp/gig_{gen_random_hash()}'
                 if self.args.store_path:
                     store_dir = os.path.abspath(self.args.store_path)
                 if not os.path.exists(store_dir):
@@ -592,10 +609,7 @@ class GitComponent:
                 last_tag = get_last_tag(self.cwd, _filter=prefix+"*")  # for git list we need glob *
                 package_scripts = []
                 package_actions = self.file.get("package-actions", {})
-                pack_install = package_actions.get("install")
-                pack_uninstall = package_actions.get("uninstall")
-                pack_update = package_actions.get("update")
-                all_files_to_look = locations + bin_files + [pack_install, pack_update, pack_uninstall]
+                all_files_to_look = locations + bin_files + list(package_actions.values())
 
                 if os.path.isabs(location_root):
                     abs_location_root = location_root
@@ -616,13 +630,29 @@ class GitComponent:
                 build_commit_hash = compose_build_commit_hash(abs_location_root, last_tag, build_commit_hash_file_list, self.args.limit)
                 package_version = f"{last_tag or '0.0.1'}{build_commit_hash}"
                 package_label = f"{slugify(cmp_name)}_{package_version}"
+                arch_type = self.args.package_type
+                if not arch_type:
+                    arch_type = self.file.get("package-archive-type")
 
                 self._debug(f"package name:{package_label}")
                 package_dir = os.path.join(store_dir, package_label)
+                # let's check if the version already exists
+                if arch_type:
+                    if arch_type == 'tgz':
+                        file_extension = f'{package_dir}.tar.gz'
+                    else:
+                        file_extension = f'{package_dir}.zip'
+                    if os.path.isfile(file_extension):
+                        print(f"Version {package_version} already exists here {file_extension}")
+                        return 0
+                else:
+                    if os.path.isdir(package_dir):
+                        print(f"Version {package_version} already exists here {package_dir}")
+                        return 0
+
                 os.makedirs(package_dir, exist_ok=True)
                 src_dir = os.path.join(package_dir, "src")
                 os.makedirs(src_dir, exist_ok=True)
-
 
                 for fpath in full_bin_files:
                     src = fpath
@@ -630,6 +660,8 @@ class GitComponent:
                     if isinstance(fpath, dict):
                         src = fpath.get("src")
                         dst = fpath.get("dst")
+                        if '/' in dst:
+                            raise Exception("Bin file dst={dst} must be just a file name, but it contains /")
                     src = os.path.abspath(os.path.join(abs_location_root, src))
                     if not os.path.isfile(src):
                         raise Exception(f"bin files = {src} must always be a file!")
@@ -637,7 +669,7 @@ class GitComponent:
                     if src_rel_to_root.startswith("../"):
                         raise Exception(f"{loc} is outside location_root={location_root}")
                     if not dst:
-                        dst = os.path.join(src_dir, src_rel_to_root)
+                        dst = os.path.join(src_dir)
                     else:
                         dst = os.path.join(src_dir, dst)
                     self._debug(f"copy bin file:{src} to {dst}")
@@ -666,18 +698,20 @@ class GitComponent:
                     else:
                         shutil.copytree(src, dst, dirs_exist_ok=True)
 
-
-                pkg_actions_scripts_dir = os.path.join(package_dir, "scripts")
+                pkg_actions_scripts_dir = os.path.join(package_dir, "actions")
                 os.makedirs(pkg_actions_scripts_dir, exist_ok=True)
-                def _copy_into_scripts(what, where):
-                    if what:
-                        shutil.copy(os.path.join(abs_location_root, what), os.path.join(pkg_actions_scripts_dir, where))
-                _copy_into_scripts(pack_install, 'install')
-                _copy_into_scripts(pack_uninstall, 'uninstall')
-                _copy_into_scripts(pack_update, 'update')
-
-                if self.args.package_type:
-                    create_package(self.args.package_type, package_version, package_dir)
+                for action, fpath in package_actions.items():
+                    shutil.copy(os.path.join(abs_location_root, fpath), os.path.join(pkg_actions_scripts_dir, action))
+                now_ts = int(datetime.datetime.utcnow().timestamp())
+                meta_data = self.file.get("package-info", {})
+                meta_data.update({
+                    "version": package_version,
+                    "name": cmp_name,
+                    "build_ts": now_ts
+                })
+                write_cfg_file(os.path.join(package_dir, 'info.json'), meta_data, human_readable=True)
+                if arch_type:
+                    create_package(meta_data, arch_type, package_dir, self.args.keep_storage_dir)
                 return 0
 
 
