@@ -582,6 +582,9 @@ class GitComponent:
                             if scripts_res != 0:
                                 return scripts_res
             elif cmd == "pack":
+                if not self.file.get("package"):
+                    print("No packaging device ... nothing to do")
+                    return
                 # first run some scripts to prepare the package internally
                 package_scripts = self.file.get("package-scripts", [])
                 if not package_scripts or not len(package_scripts):
