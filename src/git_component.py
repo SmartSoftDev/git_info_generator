@@ -619,7 +619,7 @@ class GitComponent:
                 else:
                     abs_location_root = os.path.abspath(os.path.join(self.cwd, location_root))
                 self._debug(f"location root: {abs_location_root}")
-                                # deduplicate
+                # deduplicate
                 build_commit_hash_file_list = []
                 for fpath in all_files_to_look:
                     fpath = os.path.relpath(os.path.abspath(os.path.join(abs_location_root, fpath)), abs_location_root)
@@ -629,6 +629,9 @@ class GitComponent:
                         build_commit_hash_file_list.append(fpath)
 
                 self._debug(f"check build commit hash on files: {build_commit_hash_file_list}")
+                for fpath in build_commit_hash_file_list:
+                    if not os.path.exists(os.path.join(abs_location_root, fpath)):
+                        raise Exception(f"File does not exist: {fpath}")
 
                 build_commit_hash = compose_build_commit_hash(abs_location_root, last_tag, build_commit_hash_file_list, self.args.limit)
                 package_version = f"{last_tag or '0.0.1'}{build_commit_hash}"
