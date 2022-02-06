@@ -69,6 +69,56 @@ NON_ALPHANUM_PATTERN = re.compile(r'[\W_]+')
 CHUNK_SIZE = 4096
 
 
+def args_parse():
+    parser = argparse.ArgumentParser(
+        description='Compute a hash of multiple git locations')
+    parser.add_argument('-v', '--debug', action='count',
+                        default=0, help='Enable debugging')
+    parser.add_argument('-c', '--config', action='store', type=str, default=None,
+                        help='Path to the yaml config file, or directory where .git_component.yml (default=.)')
+    parser.add_argument('-l', '--limit', action='store', type=int, default=65,
+                        help='limit the size of hash (default=65)')
+    parser.add_argument('-i', '--install-check', action='store_true', default=None,
+                        help='Run component install scripts if it was not installed before')
+    parser.add_argument('-u', '--update-check', action='store_true', default=None,
+                        help='Run component update scripts if it is detected that the component changed')
+    parser.add_argument('-C', '--changelog', action='store_true', default=None,
+                        help='Generate changelog from git history.')
+    parser.add_argument('-F', '--check-changes-from-commit', action='store', type=str, default=None,
+                        help='It will check if from that commit are changes.')
+    parser.add_argument('-s', '--store-path', action='store', type=str, default=None,
+                        help='path to the directory to store current installation status for the components '
+                             '(default=/etc/_git_components/)')
+    parser.add_argument('--user', action='store_true', default=None,
+                        help='sets path to installation status store to $HOME/.git_components/')
+
+    subparsers = parser.add_subparsers(title="Sub commands")
+    sp = subparsers.add_parser("run_tests", help="Run tests.")
+    sp.set_defaults(cmd="run_tests")
+    sp.add_argument('-U', '--unittest-check', action='store_true', default=None,
+                    help='Run component unittest scripts before installing or updating.')
+    sp.add_argument('-I', '--integration-check', action='store_true', default=None,
+                    help='Run component integration scripts after installing or updating')
+    sp.add_argument('-E', '--e2e-check', action='store_true', default=None,
+                    help='Run component end to end scripts after installing or updating')
+
+    sp = subparsers.add_parser("pack", help="Create install package.")
+    sp.set_defaults(cmd="pack")
+    sp.add_argument('-s', '--store-path', action='store', type=str, default=None,
+                    help='path to the directory to create new package (default=/tmp/gig-randomHash), or package-store '
+                    'field from .git_component.yml')
+    sp.add_argument('-t', '--package_type', type=str, choices=['tgz', 'zip', 'none'],
+                    help='Creates package of type (deletes package storage directory)(overrides the cfg file entry).')
+    sp.add_argument('-S', '--package_storage', type=str,
+                    help='Path to store the archives or packages (overrides the cfg file entry).')
+    sp.add_argument('-k', '--keep-storage-dir', action='store_true', default=None,
+                    help='Keep storage directory even if archive package was chosen')
+
+
+    return parser.parse_args()
+
+
+
 def slugify(text):
     return NON_ALPHANUM_PATTERN.sub('-', text)
 
@@ -167,52 +217,6 @@ def compose_build_commit_hash(cwd, tag, files: List, hash_limit=7) -> str:
         build_commit_hash = f"-{changes_count}"
         build_commit_hash += f"-{commits_hashes[-1][:hash_limit]}"
     return build_commit_hash
-
-
-def args_parse():
-    parser = argparse.ArgumentParser(
-        description='Compute a hash of multiple git locations')
-    parser.add_argument('-v', '--debug', action='count',
-                        default=0, help='Enable debugging')
-    parser.add_argument('-c', '--config', action='store', type=str, default=None,
-                        help='Path to the yaml config file, or directory where .git_component.yml (default=.)')
-    parser.add_argument('-l', '--limit', action='store', type=int, default=65,
-                        help='limit the size of hash (default=65)')
-    parser.add_argument('-i', '--install-check', action='store_true', default=None,
-                        help='Run component install scripts if it was not installed before')
-    parser.add_argument('-u', '--update-check', action='store_true', default=None,
-                        help='Run component update scripts if it is detected that the component changed')
-    parser.add_argument('-C', '--changelog', action='store_true', default=None,
-                        help='Generate changelog from git history.')
-    parser.add_argument('-F', '--check-changes-from-commit', action='store', type=str, default=None,
-                        help='It will check if from that commit are changes.')
-    parser.add_argument('-s', '--store-path', action='store', type=str, default=None,
-                        help='path to the directory to store current installation status for the components '
-                             '(default=/etc/_git_components/)')
-    parser.add_argument('--user', action='store_true', default=None,
-                        help='sets path to installation status store to $HOME/.git_components/')
-
-    subparsers = parser.add_subparsers(title="Sub commands")
-    sp = subparsers.add_parser("run_tests", help="Run tests.")
-    sp.set_defaults(cmd="run_tests")
-    sp.add_argument('-U', '--unittest-check', action='store_true', default=None,
-                    help='Run component unittest scripts before installing or updating.')
-    sp.add_argument('-I', '--integration-check', action='store_true', default=None,
-                    help='Run component integration scripts after installing or updating')
-    sp.add_argument('-E', '--e2e-check', action='store_true', default=None,
-                    help='Run component end to end scripts after installing or updating')
-
-    sp = subparsers.add_parser("pack", help="Create install package.")
-    sp.set_defaults(cmd="pack")
-    sp.add_argument('-s', '--store-path', action='store', type=str, default=None,
-                    help='path to the directory to create new package (default=/tmp/gig-randomHash), or package-store field from .git_component.yml')
-    sp.add_argument('-t', '--package_type', type=str, choices=['tgz', 'zip'],
-                    help='Creates package of type (deletes package storage directory).')
-    sp.add_argument('-k', '--keep-storage-dir', action='store_true', default=None,
-                    help='Keep storage directory even if archive package was chosen')
-
-
-    return parser.parse_args()
 
 
 class GitComponent:
@@ -631,7 +635,7 @@ class GitComponent:
                 self._debug(f"check build commit hash on files: {build_commit_hash_file_list}")
                 for fpath in build_commit_hash_file_list:
                     if not os.path.exists(os.path.join(abs_location_root, fpath)):
-                        raise Exception(f"File does not exist: {fpath}")
+                        raise Exception(f"File does not exist: {os.path.join(abs_location_root, fpath)}")
 
                 build_commit_hash = compose_build_commit_hash(abs_location_root, last_tag, build_commit_hash_file_list, self.args.limit)
                 package_version = f"{last_tag or '0.0.1'}{build_commit_hash}"
@@ -639,6 +643,8 @@ class GitComponent:
                 arch_type = self.args.package_type
                 if not arch_type:
                     arch_type = self.file.get("package-archive-type")
+                if arch_type == 'none':
+                    arch_type = None
 
                 self._debug(f"package name:{package_label}")
                 package_dir = os.path.join(store_dir, package_label)
