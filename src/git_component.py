@@ -58,8 +58,13 @@ import sys
 from timeit import default_timer as timer
 
 import yaml
-from packaging import create_package
 from utils import slugify, write_cfg_file, compose_build_commit_hash, get_last_tag, gen_random_hash
+import hashlib
+import os
+import shutil
+import subprocess
+from utils import write_cfg_file
+
 
 
 def args_parse():
@@ -109,6 +114,59 @@ def args_parse():
 
     return parser.parse_args()
 
+
+
+CHECKSUM_CHUNK_SIZE = 4096
+
+def create_deb_package(gc, info, package_name, root_dir):
+    package_file = f"{package_name}.deb"
+    debian_dir = os.path.join(root_dir, "DEBIAN")
+    os.makedirs(debian_dir, exist_ok=True)
+    os.chdir(debian_dir)
+    with open('control', 'w+') as f:
+        for k,v in gc.file.items():
+            if k.startswith("deb-"):
+                f.write(f"{k[4:]}: {v.strip()}\n")
+        f.write(f"Version: {info.get('version')}\n")
+    os.chdir(os.path.dirname(root_dir))
+    subprocess.check_output(f"dpkg-deb --build {root_dir}", shell=True)
+    return package_file
+
+
+def compute_check_sums(_file):
+    with open(_file, mode="rb", buffering=0) as fp:
+        md5_hash_func = hashlib.md5()
+        sha256_hash_func = hashlib.sha256()
+        buffer = fp.read(CHECKSUM_CHUNK_SIZE)
+        while len(buffer) > 0:
+            md5_hash_func.update(buffer)
+            sha256_hash_func.update(buffer)
+            buffer = fp.read(CHECKSUM_CHUNK_SIZE)
+    return sha256_hash_func.digest().hex(), md5_hash_func.digest().hex()
+
+
+def create_package(gc, info: dict, _package_type: str, _src_dir: str, keep_storage_dir: bool) -> None:
+    package_name = os.path.basename(_src_dir)
+    root_dir = os.path.dirname(_src_dir)
+    base_dir = os.path.relpath(_src_dir, root_dir)
+    os.chdir(root_dir)
+    if _package_type == "tgz":
+        package_file = shutil.make_archive(package_name, 'gztar', root_dir=root_dir, base_dir=base_dir)
+    elif _package_type == "zip":
+        package_file = shutil.make_archive(package_name, 'zip', root_dir=root_dir, base_dir=base_dir)
+    elif _package_type == "deb":
+        package_file = create_deb_package(gc, info, package_name, _src_dir)
+    else:
+        raise NotImplementedError()
+    sha256_check_sum, md5_check_sum = compute_check_sums(package_file)
+    info.update({"sha256sum": sha256_check_sum,
+                 "md5sum": md5_check_sum,
+                 "file_name": os.path.basename(package_file),
+                 "package_type": _package_type
+                 })
+    write_cfg_file(os.path.join(root_dir, f"{package_file}.info.json"), info, human_readable=True)
+    if not keep_storage_dir:
+        shutil.rmtree(_src_dir)
 
 class GitComponent:
     class GitComponentException(Exception):
@@ -233,9 +291,6 @@ class GitComponent:
                 if not (el.get("src") and el.get("dst")) and not (len(el.get("src")) and len(el.get("dst"))):
                     raise self.GitComponentException(f"'{field}' must contain list of str or dict with non empty "
                                                      f"src' and 'dst' keys")
-                if os.path.relpath(el.get("dst"), './').startswith("../"):
-                    raise self.GitComponentException(f"'{field}' contains dst={el.get('dst')} which try to "
-                                                     "be outside destination directory. looks like attacking ;) ")
             elif isinstance(el, str):
                 if not len(el):
                     raise self.GitComponentException(f"'{field}' contains empty strings")
@@ -285,8 +340,14 @@ class GitComponent:
         if not cmp_name:
             raise self.GitComponentException("'name' field is missing")
         location_root = self.file.get("location_root")
+        destination_root = ""
+        if not isinstance(location_root, str):
+            destination_root = location_root.get("dst")
+            location_root = location_root.get("src")
+
         if not location_root:
-            location_root = self.cwd
+                location_root = self.cwd
+
         print(f"Processing {cmp_name!r}")
 
         if self.args.check_changes_from_commit:
@@ -532,7 +593,8 @@ class GitComponent:
 
                 self._debug(f"check build commit hash on files: {build_commit_hash_file_list}")
                 for fpath in build_commit_hash_file_list:
-                    if not os.path.exists(os.path.join(abs_location_root, fpath)):
+                    check_path = os.path.join(abs_location_root, fpath)
+                    if not os.path.islink(check_path) and not os.path.exists(check_path):
                         raise Exception(f"File does not exist: {os.path.join(abs_location_root, fpath)}")
 
                 build_commit_hash = compose_build_commit_hash(abs_location_root, last_tag, build_commit_hash_file_list,
@@ -564,7 +626,11 @@ class GitComponent:
                         return 0
 
                 os.makedirs(package_dir, exist_ok=True)
-                src_dir = os.path.join(package_dir, "src")
+                if arch_type == 'deb':
+                    src_dir = os.path.join(package_dir, destination_root)
+                else:
+                    src_dir = os.path.join(package_dir, "src")
+
                 os.makedirs(src_dir, exist_ok=True)
 
                 for fpath in full_bin_files:
@@ -588,13 +654,14 @@ class GitComponent:
                     self._debug(f"copy bin file:{src} to {dst}")
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
                     shutil.copy(src, dst)
-
                 for fpath in full_locations:
                     src = fpath
                     dst = None
+                    follow_sym_link=True
                     if isinstance(fpath, dict):
                         src = fpath.get("src")
                         dst = fpath.get("dst")
+                        follow_sym_link = fpath.get("follow_sym_links", True)
                     src = os.path.abspath(os.path.join(abs_location_root, src))
                     src_rel_to_root = os.path.relpath(src, abs_location_root)
                     if src_rel_to_root.startswith("../"):
@@ -604,12 +671,15 @@ class GitComponent:
                     else:
                         dst = os.path.join(src_dir, dst)
 
+                    dst_rel_to_root = os.path.relpath(dst, package_dir)
+                    if dst_rel_to_root.startswith("../"):
+                        raise Exception(f"DST={dst_rel_to_root} is outside package_dir={package_dir}")
                     self._debug(f"copy location:{src} to {dst}")
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
-                    if os.path.isfile(src):
-                        shutil.copy(src, dst)
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst, dirs_exist_ok=True, symlinks=follow_sym_link)
                     else:
-                        shutil.copytree(src, dst, dirs_exist_ok=True)
+                        shutil.copy(src, dst, follow_symlinks=follow_sym_link)
 
                 pkg_actions_scripts_dir = os.path.join(package_dir, "actions")
                 os.makedirs(pkg_actions_scripts_dir, exist_ok=True)
@@ -624,7 +694,7 @@ class GitComponent:
                 })
                 write_cfg_file(os.path.join(package_dir, 'info.json'), meta_data, human_readable=True)
                 if arch_type:
-                    create_package(meta_data, arch_type, package_dir, self.args.keep_storage_dir)
+                    create_package(self, meta_data, arch_type, package_dir, self.args.keep_storage_dir)
                 return 0
 
 
