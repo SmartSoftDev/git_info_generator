@@ -42,7 +42,7 @@ package-info: a json object written to the package info.json file
 package-actions:
   install: path_to_install_script
   update: path_to_update_script
-  uninstall: path_uinstall_script
+  uninstall: path_uninstall_script
   other_action: path_to_other_action
 
 
@@ -58,13 +58,10 @@ import sys
 from timeit import default_timer as timer
 
 import yaml
-from utils import slugify, write_cfg_file, compose_build_commit_hash, get_last_tag, gen_random_hash
-import hashlib
-import os
-import shutil
-import subprocess
-from utils import write_cfg_file
 
+from utils import slugify, write_cfg_file, compose_build_commit_hash, get_last_tag, gen_random_hash
+
+CHECKSUM_CHUNK_SIZE = 4096
 
 
 def args_parse():
@@ -115,16 +112,13 @@ def args_parse():
     return parser.parse_args()
 
 
-
-CHECKSUM_CHUNK_SIZE = 4096
-
 def create_deb_package(gc, info, package_name, root_dir):
     package_file = f"{package_name}.deb"
     debian_dir = os.path.join(root_dir, "DEBIAN")
     os.makedirs(debian_dir, exist_ok=True)
     os.chdir(debian_dir)
     with open('control', 'w+') as f:
-        for k,v in gc.file.items():
+        for k, v in gc.file.items():
             if k.startswith("deb-"):
                 f.write(f"{k[4:]}: {v.strip()}\n")
         f.write(f"Version: {info.get('version')}\n")
@@ -167,6 +161,7 @@ def create_package(gc, info: dict, _package_type: str, _src_dir: str, keep_stora
     write_cfg_file(os.path.join(root_dir, f"{package_file}.info.json"), info, human_readable=True)
     if not keep_storage_dir:
         shutil.rmtree(_src_dir)
+
 
 class GitComponent:
     class GitComponentException(Exception):
@@ -346,7 +341,7 @@ class GitComponent:
             location_root = location_root.get("src")
 
         if not location_root:
-                location_root = self.cwd
+            location_root = self.cwd
 
         print(f"Processing {cmp_name!r}")
 
@@ -646,7 +641,7 @@ class GitComponent:
                         raise Exception(f"bin files = {src} must always be a file!")
                     src_rel_to_root = os.path.relpath(src, abs_location_root)
                     if src_rel_to_root.startswith("../"):
-                        raise Exception(f"{loc} is outside location_root={location_root}")
+                        raise Exception(f"{src_rel_to_root} is outside location_root={location_root}")
                     if not dst:
                         dst = os.path.join(src_dir)
                     else:
@@ -657,7 +652,7 @@ class GitComponent:
                 for fpath in full_locations:
                     src = fpath
                     dst = None
-                    follow_sym_link=True
+                    follow_sym_link = True
                     if isinstance(fpath, dict):
                         src = fpath.get("src")
                         dst = fpath.get("dst")
@@ -665,7 +660,7 @@ class GitComponent:
                     src = os.path.abspath(os.path.join(abs_location_root, src))
                     src_rel_to_root = os.path.relpath(src, abs_location_root)
                     if src_rel_to_root.startswith("../"):
-                        raise Exception(f"loc is outside location_root={location_root}")
+                        raise Exception(f"{src_rel_to_root} is outside location_root={location_root}")
                     if not dst:
                         dst = os.path.join(src_dir, src_rel_to_root)
                     else:
@@ -682,6 +677,8 @@ class GitComponent:
                         shutil.copy(src, dst, follow_symlinks=follow_sym_link)
 
                 pkg_actions_scripts_dir = os.path.join(package_dir, "actions")
+                if arch_type == "deb":
+                    pkg_actions_scripts_dir = os.path.join(package_dir, "DEBIAN")
                 os.makedirs(pkg_actions_scripts_dir, exist_ok=True)
                 for action, fpath in package_actions.items():
                     shutil.copy(os.path.join(abs_location_root, fpath), os.path.join(pkg_actions_scripts_dir, action))
