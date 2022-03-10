@@ -392,6 +392,9 @@ class GitComponent:
         cmp_name = self.file.get("name")
         if not cmp_name:
             raise self.GitComponentException("'name' field is missing")
+        location_root = self.file.get("location_root")
+        if not location_root:
+            location_root = self.cwd
         print(f"Processing {cmp_name!r}")
 
         if self.args.check_changes_from_commit:
@@ -608,9 +611,6 @@ class GitComponent:
                 if not os.path.exists(store_dir):
                     os.makedirs(store_dir)
                 self._debug(f"package tmp dir:{store_dir}")
-                location_root = self.file.get("location_root")
-                if not location_root:
-                    location_root = self.cwd
                 prefix = self.file.get("git_tab_prefix", "")
                 bin_files, full_bin_files = self.__get_location_list("bin_files", [])
                 last_tag = get_last_tag(self.cwd, _filter=prefix+"*")  # for git list we need glob *
