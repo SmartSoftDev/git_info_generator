@@ -122,6 +122,8 @@ def create_deb_package(gc, info, package_name, root_dir):
             if k.startswith("deb-"):
                 f.write(f"{k[4:]}: {v.strip()}\n")
         f.write(f"Version: {info.get('version')}\n")
+        f.write(f"Package: {gc.name}\n")
+
     os.chdir(os.path.dirname(root_dir))
     subprocess.check_output(f"dpkg-deb --build {root_dir}", shell=True)
     return package_file
@@ -311,6 +313,7 @@ class GitComponent:
             self.file = yaml.safe_load(f)
         self.is_just_installed = False
         self.is_just_updated = False
+        self.name = None
 
     def _debug(self, txt):
         if self.args.debug:
@@ -332,6 +335,7 @@ class GitComponent:
                     f"location={loc} is ABSOLUTE (only relative paths are allowed)")
         # validate the name
         cmp_name = self.file.get("name")
+        self.name = cmp_name
         if not cmp_name:
             raise self.GitComponentException("'name' field is missing")
         location_root = self.file.get("location_root")
@@ -682,6 +686,8 @@ class GitComponent:
                 os.makedirs(pkg_actions_scripts_dir, exist_ok=True)
                 for action, fpath in package_actions.items():
                     shutil.copy(os.path.join(abs_location_root, fpath), os.path.join(pkg_actions_scripts_dir, action))
+                    if arch_type == 'deb':
+                        os.chmod(os.path.join(pkg_actions_scripts_dir, action), 0o775)
                 now_ts = int(datetime.datetime.utcnow().timestamp())
                 meta_data = self.file.get("package-info", {})
                 meta_data.update({
