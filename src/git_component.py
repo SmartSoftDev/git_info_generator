@@ -42,7 +42,7 @@ package-info: a json object written to the package info.json file
 package-actions:
   install: path_to_install_script
   update: path_to_update_script
-  uninstall: path_uinstall_script
+  uninstall: path_uninstall_script
   other_action: path_to_other_action
 
 
@@ -51,22 +51,17 @@ NOTE: if you have ideas how to improve this script just create an issue on https
 import argparse
 import datetime
 import hashlib
-import json
 import os
-import re
 import shutil
 import subprocess
 import sys
-import uuid
 from timeit import default_timer as timer
-from typing import Union, List
-from numpy import isin
 
 import yaml
 
-# equivalent to [^a-zA-Z0-9]
-NON_ALPHANUM_PATTERN = re.compile(r'[\W_]+')
-CHUNK_SIZE = 4096
+from utils import slugify, write_cfg_file, compose_build_commit_hash, get_last_tag, gen_random_hash
+
+CHECKSUM_CHUNK_SIZE = 4096
 
 
 def args_parse():
@@ -106,63 +101,47 @@ def args_parse():
     sp.set_defaults(cmd="pack")
     sp.add_argument('-s', '--store-path', action='store', type=str, default=None,
                     help='path to the directory to create new package (default=/tmp/gig-randomHash), or package-store '
-                    'field from .git_component.yml')
-    sp.add_argument('-t', '--package_type', type=str, choices=['tgz', 'zip', 'none'],
+                         'field from .git_component.yml')
+    sp.add_argument('-t', '--package_type', type=str, choices=['tgz', 'zip', 'deb', 'none'],
                     help='Creates package of type (deletes package storage directory)(overrides the cfg file entry).')
     sp.add_argument('-S', '--package_storage', type=str,
                     help='Path to store the archives or packages (overrides the cfg file entry).')
     sp.add_argument('-k', '--keep-storage-dir', action='store_true', default=None,
                     help='Keep storage directory even if archive package was chosen')
 
-
     return parser.parse_args()
 
 
+def create_deb_package(gc, info, package_name, root_dir):
+    package_file = f"{package_name}.deb"
+    debian_dir = os.path.join(root_dir, "DEBIAN")
+    os.makedirs(debian_dir, exist_ok=True)
+    os.chdir(debian_dir)
+    with open('control', 'w+') as f:
+        for k, v in gc.file.items():
+            if k.startswith("deb-"):
+                f.write(f"{k[4:]}: {v.strip()}\n")
+        f.write(f"Version: {info.get('version')}\n")
+        f.write(f"Package: {gc.name}\n")
 
-def slugify(text):
-    return NON_ALPHANUM_PATTERN.sub('-', text)
-
-
-def gen_random_hash():
-    return uuid.uuid4().hex
-
-
-def write_cfg_file(file_path, data, human_readable=False):
-    """writes json file.
-    NOTE: it will always write in an atomic manner (first write to tmp file then move it to destination
-    when writing configuration files is IMPORTANT to protect against powerOFF events and do not leave the CFG file
-    half written.
-    """
-
-    tmp_file_path = file_path + ".tmp"
-    with open(tmp_file_path, "w+") as f:
-        json.dump(data, f, indent=2 if human_readable else None)
-        f.flush()
-        os.fsync(f.fileno())
-    # rename should be atomic operation
-    os.rename(tmp_file_path, file_path)
-    # still we would like to sync the hole parent directory.
-    dir_name = os.path.dirname(file_path)
-    if not dir_name:
-        dir_name = '.'
-    dir_fd = os.open(dir_name, os.O_DIRECTORY | os.O_CLOEXEC)
-    os.fsync(dir_fd)
-    os.close(dir_fd)
+    os.chdir(os.path.dirname(root_dir))
+    subprocess.check_output(f"dpkg-deb --build {root_dir}", shell=True)
+    return package_file
 
 
 def compute_check_sums(_file):
     with open(_file, mode="rb", buffering=0) as fp:
         md5_hash_func = hashlib.md5()
         sha256_hash_func = hashlib.sha256()
-        buffer = fp.read(CHUNK_SIZE)
+        buffer = fp.read(CHECKSUM_CHUNK_SIZE)
         while len(buffer) > 0:
             md5_hash_func.update(buffer)
             sha256_hash_func.update(buffer)
-            buffer = fp.read(CHUNK_SIZE)
+            buffer = fp.read(CHECKSUM_CHUNK_SIZE)
     return sha256_hash_func.digest().hex(), md5_hash_func.digest().hex()
 
 
-def create_package(info: dict, _package_type: str,  _src_dir: str, keep_storage_dir: bool) -> None:
+def create_package(gc, info: dict, _package_type: str, _src_dir: str, keep_storage_dir: bool) -> None:
     package_name = os.path.basename(_src_dir)
     root_dir = os.path.dirname(_src_dir)
     base_dir = os.path.relpath(_src_dir, root_dir)
@@ -171,52 +150,19 @@ def create_package(info: dict, _package_type: str,  _src_dir: str, keep_storage_
         package_file = shutil.make_archive(package_name, 'gztar', root_dir=root_dir, base_dir=base_dir)
     elif _package_type == "zip":
         package_file = shutil.make_archive(package_name, 'zip', root_dir=root_dir, base_dir=base_dir)
+    elif _package_type == "deb":
+        package_file = create_deb_package(gc, info, package_name, _src_dir)
     else:
-        raise NotImplemented()
+        raise NotImplementedError()
     sha256_check_sum, md5_check_sum = compute_check_sums(package_file)
     info.update({"sha256sum": sha256_check_sum,
-            "md5sum": md5_check_sum,
-            "file_name": os.path.basename(package_file),
-            "package_type": _package_type
-            })
+                 "md5sum": md5_check_sum,
+                 "file_name": os.path.basename(package_file),
+                 "package_type": _package_type
+                 })
     write_cfg_file(os.path.join(root_dir, f"{package_file}.info.json"), info, human_readable=True)
     if not keep_storage_dir:
         shutil.rmtree(_src_dir)
-
-
-def get_last_tag(cwd, _filter: str) -> Union[None, str]:
-    """get last tag for some specific component"""
-    cmd = ["git", "tag", "--list", _filter, "--merged"]
-    tags = []
-    try:
-        tags = subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT)
-    except subprocess.CalledProcessError:
-        print(f"Found no tags for {_filter} pattern.")
-    if tags:
-        return tags[-1]
-    return
-
-
-def compose_build_commit_hash(cwd, tag, files: List, hash_limit=7) -> str:
-    commits_hashes = []
-    cmd = ["git", "log", "--format=%h", "--", *files]
-    if tag:
-        # get all commits hashes from last tag until head
-        cmd = ["git", "log", "--format=%h", f"{tag}..HEAD", "--", *files]
-    try:
-        commits_hashes = subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT)
-    except subprocess.CalledProcessError:
-        pass
-    if commits_hashes:
-        commits_hashes = [c.strip() for c in commits_hashes.decode().strip().split("\n") if c.strip()]
-    changes_count = len(commits_hashes)
-    # the build_commit_hash: -20-65ecc13
-    build_commit_hash = ""
-    if changes_count > 0:
-        # creates build_commit_hash with git short hash ex: "20-65ecc13"
-        build_commit_hash = f"-{changes_count}"
-        build_commit_hash += f"-{commits_hashes[-1][:hash_limit]}"
-    return build_commit_hash
 
 
 class GitComponent:
@@ -339,11 +285,9 @@ class GitComponent:
             raise self.GitComponentException(f"'{field}' field from config file MUST be a list!")
         for el in component_field:
             if isinstance(el, dict):
-                if not(el.get("src") and el.get("dst")) and not (len(el.get("src")) and len(el.get("dst"))):
+                if not (el.get("src") and el.get("dst")) and not (len(el.get("src")) and len(el.get("dst"))):
                     raise self.GitComponentException(f"'{field}' must contain list of str or dict with non empty "
                                                      f"src' and 'dst' keys")
-                if os.path.relpath(el.get("dst"), './').startswith("../"):
-                    raise self.GitComponentException(f"'{field}' contains dst={el.get('dst')} which try to be outside destination directory. looks like atacking ;) ")
             elif isinstance(el, str):
                 if not len(el):
                     raise self.GitComponentException(f"'{field}' contains empty strings")
@@ -369,13 +313,14 @@ class GitComponent:
             self.file = yaml.safe_load(f)
         self.is_just_installed = False
         self.is_just_updated = False
+        self.name = None
 
     def _debug(self, txt):
         if self.args.debug:
             print(txt)
 
     def run(self):
-        locations, full_locations = self.__get_location_list("locations")
+        locations, full_locations = self.__get_location_list("locations", [])
 
         # validate locations
         for loc in locations:
@@ -390,11 +335,18 @@ class GitComponent:
                     f"location={loc} is ABSOLUTE (only relative paths are allowed)")
         # validate the name
         cmp_name = self.file.get("name")
+        self.name = cmp_name
         if not cmp_name:
             raise self.GitComponentException("'name' field is missing")
         location_root = self.file.get("location_root")
+        destination_root = ""
+        if not isinstance(location_root, str):
+            destination_root = location_root.get("dst")
+            location_root = location_root.get("src")
+
         if not location_root:
             location_root = self.cwd
+
         print(f"Processing {cmp_name!r}")
 
         if self.args.check_changes_from_commit:
@@ -600,7 +552,13 @@ class GitComponent:
                     scripts_res, install_duration = self._run_scripts(inst_scripts)
                     print(f"package_scripts={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
 
-                store_dir = self.file.get("package-storage", None)
+                # first check if scripts was run with package_storage argument if not
+                # load it from file
+                store_dir = self.args.package_storage
+
+                if not store_dir:
+                    store_dir = self.file.get("package-storage", None)
+
                 if store_dir:
                     if not os.path.isabs(store_dir):
                         store_dir = os.path.abspath(os.path.join(self.cwd, store_dir))
@@ -613,7 +571,7 @@ class GitComponent:
                 self._debug(f"package tmp dir:{store_dir}")
                 prefix = self.file.get("git_tab_prefix", "")
                 bin_files, full_bin_files = self.__get_location_list("bin_files", [])
-                last_tag = get_last_tag(self.cwd, _filter=prefix+"*")  # for git list we need glob *
+                last_tag = get_last_tag(self.cwd, _filter=f"{prefix}*")  # for git list we need glob *
                 package_scripts = []
                 package_actions = self.file.get("package-actions", {})
                 all_files_to_look = locations + bin_files + list(package_actions.values())
@@ -634,10 +592,12 @@ class GitComponent:
 
                 self._debug(f"check build commit hash on files: {build_commit_hash_file_list}")
                 for fpath in build_commit_hash_file_list:
-                    if not os.path.exists(os.path.join(abs_location_root, fpath)):
+                    check_path = os.path.join(abs_location_root, fpath)
+                    if not os.path.islink(check_path) and not os.path.exists(check_path):
                         raise Exception(f"File does not exist: {os.path.join(abs_location_root, fpath)}")
 
-                build_commit_hash = compose_build_commit_hash(abs_location_root, last_tag, build_commit_hash_file_list, self.args.limit)
+                build_commit_hash = compose_build_commit_hash(abs_location_root, last_tag, build_commit_hash_file_list,
+                                                              self.args.limit)
                 package_version = f"{last_tag or '0.0.1'}{build_commit_hash}"
                 package_label = f"{slugify(cmp_name)}_{package_version}"
                 arch_type = self.args.package_type
@@ -652,6 +612,8 @@ class GitComponent:
                 if arch_type:
                     if arch_type == 'tgz':
                         file_extension = f'{package_dir}.tar.gz'
+                    elif arch_type == 'deb':
+                        file_extension = f'{package_dir}.deb'
                     else:
                         file_extension = f'{package_dir}.zip'
                     if os.path.isfile(file_extension):
@@ -663,7 +625,11 @@ class GitComponent:
                         return 0
 
                 os.makedirs(package_dir, exist_ok=True)
-                src_dir = os.path.join(package_dir, "src")
+                if arch_type == 'deb':
+                    src_dir = os.path.join(package_dir, destination_root)
+                else:
+                    src_dir = os.path.join(package_dir, "src")
+
                 os.makedirs(src_dir, exist_ok=True)
 
                 for fpath in full_bin_files:
@@ -679,7 +645,7 @@ class GitComponent:
                         raise Exception(f"bin files = {src} must always be a file!")
                     src_rel_to_root = os.path.relpath(src, abs_location_root)
                     if src_rel_to_root.startswith("../"):
-                        raise Exception(f"{loc} is outside location_root={location_root}")
+                        raise Exception(f"{src_rel_to_root} is outside location_root={location_root}")
                     if not dst:
                         dst = os.path.join(src_dir)
                     else:
@@ -687,33 +653,41 @@ class GitComponent:
                     self._debug(f"copy bin file:{src} to {dst}")
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
                     shutil.copy(src, dst)
-
                 for fpath in full_locations:
                     src = fpath
                     dst = None
+                    follow_sym_link = True
                     if isinstance(fpath, dict):
                         src = fpath.get("src")
                         dst = fpath.get("dst")
+                        follow_sym_link = fpath.get("follow_sym_links", True)
                     src = os.path.abspath(os.path.join(abs_location_root, src))
                     src_rel_to_root = os.path.relpath(src, abs_location_root)
                     if src_rel_to_root.startswith("../"):
-                        raise Exception(f"{loc} is outside location_root={location_root}")
+                        raise Exception(f"{src_rel_to_root} is outside location_root={location_root}")
                     if not dst:
                         dst = os.path.join(src_dir, src_rel_to_root)
                     else:
                         dst = os.path.join(src_dir, dst)
 
+                    dst_rel_to_root = os.path.relpath(dst, package_dir)
+                    if dst_rel_to_root.startswith("../"):
+                        raise Exception(f"DST={dst_rel_to_root} is outside package_dir={package_dir}")
                     self._debug(f"copy location:{src} to {dst}")
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
-                    if os.path.isfile(src):
-                        shutil.copy(src, dst)
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst, dirs_exist_ok=True, symlinks=follow_sym_link)
                     else:
-                        shutil.copytree(src, dst, dirs_exist_ok=True)
+                        shutil.copy(src, dst, follow_symlinks=follow_sym_link)
 
                 pkg_actions_scripts_dir = os.path.join(package_dir, "actions")
+                if arch_type == "deb":
+                    pkg_actions_scripts_dir = os.path.join(package_dir, "DEBIAN")
                 os.makedirs(pkg_actions_scripts_dir, exist_ok=True)
                 for action, fpath in package_actions.items():
                     shutil.copy(os.path.join(abs_location_root, fpath), os.path.join(pkg_actions_scripts_dir, action))
+                    if arch_type == 'deb':
+                        os.chmod(os.path.join(pkg_actions_scripts_dir, action), 0o775)
                 now_ts = int(datetime.datetime.utcnow().timestamp())
                 meta_data = self.file.get("package-info", {})
                 meta_data.update({
@@ -723,7 +697,7 @@ class GitComponent:
                 })
                 write_cfg_file(os.path.join(package_dir, 'info.json'), meta_data, human_readable=True)
                 if arch_type:
-                    create_package(meta_data, arch_type, package_dir, self.args.keep_storage_dir)
+                    create_package(self, meta_data, arch_type, package_dir, self.args.keep_storage_dir)
                 return 0
 
 
