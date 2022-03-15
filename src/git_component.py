@@ -321,7 +321,10 @@ class GitComponent:
 
     def run(self):
         locations, full_locations = self.__get_location_list("locations", [])
-
+        git_files, _ = self.__get_location_list('git_files', [])
+        locations.extend(git_files)
+        just_copy_files, _ = self.__get_location_list('just_copy', [])
+        full_locations.extend(just_copy_files)
         # validate locations
         for loc in locations:
             if not isinstance(loc, (int, float, str)):
