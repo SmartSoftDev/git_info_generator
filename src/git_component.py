@@ -649,7 +649,7 @@ class GitComponent:
                     if src_rel_to_root.startswith("../"):
                         raise Exception(f"{src_rel_to_root} is outside location_root={location_root}")
                     if not dst:
-                        dst = os.path.join(src_dir)
+                        dst = os.path.join(src_dir, fpath)
                     else:
                         dst = os.path.join(src_dir, dst)
                     self._debug(f"copy bin file:{src} to {dst}")
@@ -697,7 +697,7 @@ class GitComponent:
                     "name": cmp_name,
                     "build_ts": now_ts
                 })
-                write_cfg_file(os.path.join(package_dir, 'info.json'), meta_data, human_readable=True)
+                write_cfg_file(os.path.join(src_dir, 'info.json'), meta_data, human_readable=True)
                 if arch_type:
                     create_package(self, meta_data, arch_type, package_dir, self.args.keep_storage_dir)
                 return 0
