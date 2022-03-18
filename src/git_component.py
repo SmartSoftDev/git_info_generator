@@ -340,7 +340,7 @@ class GitComponent:
             raise self.GitComponentException("'name' field is missing")
         location_root = self.file.get("location_root")
         destination_root = ""
-        if not isinstance(location_root, str):
+        if location_root and not isinstance(location_root, str):
             destination_root = location_root.get("dst")
             location_root = location_root.get("src")
 
@@ -542,7 +542,7 @@ class GitComponent:
                                 return scripts_res
             elif cmd == "pack":
                 if not self.file.get("package"):
-                    print("No packaging device ... nothing to do")
+                    print("No packaging is defined ... nothing to do")
                     return
                 # first run some scripts to prepare the package internally
                 package_scripts = self.file.get("package-scripts", [])
