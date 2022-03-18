@@ -549,7 +549,7 @@ class GitComponent:
                 if not package_scripts or not len(package_scripts):
                     self._debug(f"Nothing to run for {cmp_name}: package_scripts is empty or missing")
                 else:
-                    scripts_res, install_duration = self._run_scripts(inst_scripts)
+                    scripts_res, install_duration = self._run_scripts(package_scripts)
                     print(f"package_scripts={cmp_name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'}")
 
                 # first check if scripts was run with package_storage argument if not
@@ -572,7 +572,6 @@ class GitComponent:
                 prefix = self.file.get("git_tab_prefix", "")
                 bin_files, full_bin_files = self.__get_location_list("bin_files", [])
                 last_tag = get_last_tag(self.cwd, _filter=f"{prefix}*")  # for git list we need glob *
-                package_scripts = []
                 package_actions = self.file.get("package-actions", {})
                 all_files_to_look = locations + bin_files + list(package_actions.values())
 
