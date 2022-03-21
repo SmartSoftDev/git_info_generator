@@ -350,14 +350,6 @@ class GitComponent:
                 if not self.file.get("package"):
                     print("No packaging device ... nothing to do")
                     return
-                # first run some scripts to prepare the package internally
-                package_scripts = self.file.get("package-scripts", [])
-                if not package_scripts or not len(package_scripts):
-                    self._debug(f"Nothing to run for {self.name}: package_scripts is empty or missing")
-                else:
-                    scripts_res, install_duration = self._run_scripts(package_scripts)
-                    print(f"package_scripts={self.name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'} "
-                          f"duration={install_duration}")
 
                 # first check if scripts was run with package_storage argument if not
                 # load it from file
@@ -429,6 +421,15 @@ class GitComponent:
                     if os.path.isdir(package_dir):
                         print(f"Version {package_version} already exists here {package_dir}")
                         return 0
+
+                # after we know new file must be created run some scripts to prepare the package internally
+                package_scripts = self.file.get("package-scripts", [])
+                if not package_scripts or not len(package_scripts):
+                    self._debug(f"Nothing to run for {self.name}: package_scripts is empty or missing")
+                else:
+                    scripts_res, install_duration = self._run_scripts(package_scripts)
+                    print(f"package_scripts={self.name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'} "
+                          f"duration={install_duration}")
 
                 os.makedirs(package_dir, exist_ok=True)
                 if arch_type == 'deb':
