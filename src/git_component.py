@@ -178,7 +178,7 @@ class GitComponent:
     def _get_repo_hash(self, locations):
         repos = dict()
         for loc in locations:
-            loc = os.path.join(self.cwd, loc)
+            loc = os.path.join(self.abs_location_root, loc)
             if os.path.isfile(loc):
                 repo_cwd = os.path.dirname(loc)
             else:
@@ -223,13 +223,12 @@ class GitComponent:
         return d
 
     def _save_installation_info(self, cmp_file_path,
-                                final_hash, repos, location, inst_duration, update=False, old_info=None):
+                                final_hash, location, inst_duration, update=False, old_info=None):
         inst_time = datetime.datetime.utcnow()
         inst_epoch = round(inst_time.timestamp(), 3)
         info = {
             "current_version": {
                 "hash": final_hash,
-                "repos": repos,
                 "utctime": inst_time,
                 "utcepoch": inst_epoch,
                 "location": location,
@@ -544,7 +543,7 @@ class GitComponent:
     def run(self):
         self.get_root_location()
         self.locations, self.full_locations = self.__get_location_object_list("locations")
-        self.git_files = self.__get_location_list('git_files')
+        self.git_files = self.__get_location_list('git_only_files')
 
         _ , self.just_copy_files = self.__get_location_object_list('just_copy')
         self.bin_files, self.full_bin_files = self.__get_location_object_list("bin_files")
@@ -591,10 +590,6 @@ class GitComponent:
             if self.args.install_check and not info:
                 # we must run first the install, only then changelog
                 print(f"component {self.name} must be installed ...")
-                repos = self._get_repo_hash(self.all_git_files_to_look)
-                for repo, repo_hash in repos.items():
-                    print(f"Repo={repo} with repo_commit={repo_hash}")
-
                 inst_scripts = self.file.get("install-scripts", [])
                 if not inst_scripts or len(inst_scripts) == 0:
                     print(f"Nothing to run for {self.name}: install-scripts is empty or missing")
@@ -606,7 +601,6 @@ class GitComponent:
                         info = self._save_installation_info(
                             cmp_file_name,
                             final_hash,
-                            repos,
                             self.real_cfg_file,
                             install_duration
                         )
@@ -619,10 +613,6 @@ class GitComponent:
                 print(f"Component {self.name!r} is up to date ...")
             else:
                 print(f"Component {self.name!r} must be updated ...")
-                repos = self._get_repo_hash(self.all_git_files_to_look)
-                for repo, repo_hash in repos.items():
-                    print(f"Repo={repo} with "
-                          f"repo_commit={info['current_version']['repos'].get(repo, '')[:self.args.limit]} -> {repo_hash[:self.args.limit]}")
                 update_scripts = self.file.get("update-scripts", [])
                 if not update_scripts or len(update_scripts) == 0:
                     print(f"Nothing to run for {self.name}: install-scripts is empty or missing")
@@ -633,7 +623,6 @@ class GitComponent:
                         info = self._save_installation_info(
                             cmp_file_name,
                             final_hash,
-                            repos,
                             self.real_cfg_file,
                             scripts_duration,
                             True,
