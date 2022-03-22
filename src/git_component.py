@@ -178,7 +178,7 @@ class GitComponent:
     def _get_repo_hash(self, locations):
         repos = dict()
         for loc in locations:
-            loc = os.path.join(self.cwd, loc)
+            loc = os.path.join(self.cwd, self.location_root, loc)
             if os.path.isfile(loc):
                 repo_cwd = os.path.dirname(loc)
             else:
@@ -571,12 +571,12 @@ class GitComponent:
             cmp_name_slug = slugify(self.name)
             cmp_file_name = os.path.join(store_dir, f"{cmp_name_slug}.yml")
 
-            self._debug(f"git-hashes:")
+            self._debug("git-hashes:")
             # we MUST always sort the locations so that the result does not change when the order is different
             locations = sorted(locations)
             hashes = []
             for loc in locations:
-                loc = os.path.join(self.cwd, loc)
+                loc = os.path.join(self.cwd, self.location_root, loc)
                 cmd = ["git", "log", "-n1", '--format=%H', "--", loc]
                 resp = subprocess.check_output(cmd, cwd=self.cwd).decode("utf-8").strip()
                 if len(resp) == 0:
