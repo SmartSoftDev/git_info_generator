@@ -48,7 +48,7 @@ def compose_build_commit_hash(cwd, tag, files: List, hash_limit=7) -> str:
     if changes_count > 0:
         # creates build_commit_hash with git short hash ex: "20-65ecc13"
         build_commit_hash = f"-{changes_count}"
-        build_commit_hash += f"-{commits_hashes[-1][:hash_limit]}"
+        build_commit_hash += f"-{commits_hashes[0][:hash_limit]}"
     return build_commit_hash
 
 

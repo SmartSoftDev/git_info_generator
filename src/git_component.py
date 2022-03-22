@@ -278,8 +278,21 @@ class GitComponent:
             })
         return res
 
-    def __get_location_list(self, field, default_value=None):
-        component_field = self.file.get(field, default_value)
+    def __get_location_list(self, field):
+        component_field = self.file.get(field, [])
+        ret = []
+        for el in component_field:
+            if not isinstance(el, (int, float, str)):
+                raise self.GitComponentException(f"'{field}' must be string")
+            el = str(el)
+            if not el:
+                raise self.GitComponentException(f"'{field}' contains empty strings")
+            ret.append(el)
+
+        return ret
+
+    def __get_location_object_list(self, field):
+        component_field = self.file.get(field, [])
         if component_field is None:
             raise self.GitComponentException(f"Config file has no '{field}' list!")
         if not isinstance(component_field, list):
@@ -289,7 +302,7 @@ class GitComponent:
                 if not (el.get("src") and el.get("dst")) and not (len(el.get("src")) and len(el.get("dst"))):
                     raise self.GitComponentException(f"'{field}' must contain list of str or dict with non empty "
                                                      f"src' and 'dst' keys")
-            elif isinstance(el, str):
+            elif isinstance(el, (int, float, str)):
                 if not len(el):
                     raise self.GitComponentException(f"'{field}' contains empty strings")
             else:
@@ -298,6 +311,32 @@ class GitComponent:
         path_list = [el.get("src") if isinstance(el, dict) else el for el in component_field]
         return path_list, component_field
 
+    def __get_paths_to_git_check(self):
+        # deduplicate
+        build_commit_hash_file_list = []
+        for fpath in self.all_git_files_to_look:
+            fpath = os.path.relpath(os.path.abspath(os.path.join(self.abs_location_root, fpath)), self.abs_location_root)
+            if fpath.startswith("../"):
+                raise Exception(f"'{fpath}' outside root location")
+            if fpath not in build_commit_hash_file_list:
+                build_commit_hash_file_list.append(fpath)
+
+        self._debug(f"check build commit hash on files: {build_commit_hash_file_list}")
+        for fpath in build_commit_hash_file_list:
+            check_path = os.path.join(self.abs_location_root, fpath)
+            if not os.path.islink(check_path) and not os.path.exists(check_path):
+                raise Exception(f"File does not exist: {os.path.join(self.abs_location_root, fpath)}")
+
+        return build_commit_hash_file_list
+    def __get_git_version(self):
+        prefix = self.file.get("git_tab_prefix", "")
+        last_tag = get_last_tag(self.cwd, _filter=f"{prefix}*")  # for git list we need glob *
+
+        build_commit_hash = compose_build_commit_hash(self.abs_location_root,
+                                                        last_tag,
+                                                        self.__get_paths_to_git_check(),
+                                                        self.args.limit)
+        return f"{last_tag or '0.0.1'}{build_commit_hash}"
     def __init__(self, args):
         self.args = args
         cfg_file = self.DEF_CMP_FILE_NAME
@@ -330,8 +369,14 @@ class GitComponent:
 
         if not self.location_root:
             self.location_root = self.cwd
+        if os.path.isabs(self.location_root):
+            self.abs_location_root = self.location_root
+        else:
+            self.abs_location_root = os.path.abspath(os.path.join(self.cwd, self.location_root))
+        self._debug(f"location root: {self.abs_location_root}")
 
-    def process_cmds(self, locations: List, full_locations: List):
+
+    def process_cmds(self):
         cmd = getattr(self.args, 'cmd', None)
         if cmd:
             if cmd == "run_tests":
@@ -368,35 +413,7 @@ class GitComponent:
                 if not os.path.exists(store_dir):
                     os.makedirs(store_dir)
                 self._debug(f"package tmp dir:{store_dir}")
-                prefix = self.file.get("git_tab_prefix", "")
-                bin_files, full_bin_files = self.__get_location_list("bin_files", [])
-                last_tag = get_last_tag(self.cwd, _filter=f"{prefix}*")  # for git list we need glob *
-                package_actions = self.file.get("package-actions", {})
-                all_files_to_look = locations + bin_files + list(package_actions.values())
-
-                if os.path.isabs(self.location_root):
-                    abs_location_root = self.location_root
-                else:
-                    abs_location_root = os.path.abspath(os.path.join(self.cwd, self.location_root))
-                self._debug(f"location root: {abs_location_root}")
-                # deduplicate
-                build_commit_hash_file_list = []
-                for fpath in all_files_to_look:
-                    fpath = os.path.relpath(os.path.abspath(os.path.join(abs_location_root, fpath)), abs_location_root)
-                    if fpath.startswith("../"):
-                        raise Exception(f"'{fpath}' outside root location")
-                    if fpath not in build_commit_hash_file_list:
-                        build_commit_hash_file_list.append(fpath)
-
-                self._debug(f"check build commit hash on files: {build_commit_hash_file_list}")
-                for fpath in build_commit_hash_file_list:
-                    check_path = os.path.join(abs_location_root, fpath)
-                    if not os.path.islink(check_path) and not os.path.exists(check_path):
-                        raise Exception(f"File does not exist: {os.path.join(abs_location_root, fpath)}")
-
-                build_commit_hash = compose_build_commit_hash(abs_location_root, last_tag, build_commit_hash_file_list,
-                                                              self.args.limit)
-                package_version = f"{last_tag or '0.0.1'}{build_commit_hash}"
+                package_version = self.__get_git_version()
                 package_label = f"{slugify(self.name)}_{package_version}"
                 arch_type = self.args.package_type
                 if not arch_type:
@@ -439,7 +456,7 @@ class GitComponent:
 
                 os.makedirs(src_dir, exist_ok=True)
 
-                for fpath in full_bin_files:
+                for fpath in self.full_bin_files:
                     src = fpath
                     dst = None
                     if isinstance(fpath, dict):
@@ -447,10 +464,10 @@ class GitComponent:
                         dst = fpath.get("dst")
                         if '/' in dst:
                             raise Exception("Bin file dst={dst} must be just a file name, but it contains /")
-                    src = os.path.abspath(os.path.join(abs_location_root, src))
+                    src = os.path.abspath(os.path.join(self.abs_location_root, src))
                     if not os.path.isfile(src):
                         raise Exception(f"bin files = {src} must always be a file!")
-                    src_rel_to_root = os.path.relpath(src, abs_location_root)
+                    src_rel_to_root = os.path.relpath(src, self.abs_location_root)
                     if src_rel_to_root.startswith("../"):
                         raise Exception(f"{src_rel_to_root} is outside location_root={self.location_root}")
                     if not dst:
@@ -460,7 +477,9 @@ class GitComponent:
                     self._debug(f"copy bin file:{src} to {dst}")
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
                     shutil.copy(src, dst)
-                for fpath in full_locations:
+
+                copy_locations = self.full_locations + self.just_copy_files
+                for fpath in copy_locations:
                     src = fpath
                     dst = None
                     follow_sym_link = True
@@ -468,8 +487,8 @@ class GitComponent:
                         src = fpath.get("src")
                         dst = fpath.get("dst")
                         follow_sym_link = fpath.get("follow_sym_links", True)
-                    src = os.path.abspath(os.path.join(abs_location_root, src))
-                    src_rel_to_root = os.path.relpath(src, abs_location_root)
+                    src = os.path.abspath(os.path.join(self.abs_location_root, src))
+                    src_rel_to_root = os.path.relpath(src, self.abs_location_root)
                     if src_rel_to_root.startswith("../"):
                         raise Exception(f"{src_rel_to_root} is outside location_root={self.location_root}")
                     if not dst:
@@ -491,8 +510,9 @@ class GitComponent:
                 if arch_type == "deb":
                     pkg_actions_scripts_dir = os.path.join(package_dir, "DEBIAN")
                 os.makedirs(pkg_actions_scripts_dir, exist_ok=True)
-                for action, fpath in package_actions.items():
-                    shutil.copy(os.path.join(abs_location_root, fpath), os.path.join(pkg_actions_scripts_dir, action))
+                for action, fpath in self.package_actions.items():
+                    shutil.copy(os.path.join(self.abs_location_root, fpath),
+                                os.path.join(pkg_actions_scripts_dir, action))
                     if arch_type == 'deb':
                         os.chmod(os.path.join(pkg_actions_scripts_dir, action), 0o775)
                 now_ts = int(datetime.datetime.utcnow().timestamp())
@@ -522,28 +542,20 @@ class GitComponent:
         return changes
 
     def run(self):
-        locations, full_locations = self.__get_location_list("locations", [])
-        git_files, _ = self.__get_location_list('git_files', [])
-        locations.extend(git_files)
-        just_copy_files, _ = self.__get_location_list('just_copy', [])
-        full_locations.extend(just_copy_files)
-        # validate locations
-        for loc in locations:
-            if not isinstance(loc, (int, float, str)):
-                raise self.GitComponentException(f"location={loc} is not a string!")
-            try:
-                loc = str(loc)
-            except Exception:
-                raise self.GitComponentException(f"location={loc} is not a string!")
-            if os.path.isabs(loc):
-                raise self.GitComponentException(
-                    f"location={loc} is ABSOLUTE (only relative paths are allowed)")
+        self.get_root_location()
+        self.locations, self.full_locations = self.__get_location_object_list("locations")
+        self.git_files = self.__get_location_list('git_files')
+
+        _ , self.just_copy_files = self.__get_location_object_list('just_copy')
+        self.bin_files, self.full_bin_files = self.__get_location_object_list("bin_files")
+        self.package_actions = self.file.get("package-actions", {})
+
+        self.all_git_files_to_look = self.locations + self.bin_files + self.git_files + list(self.package_actions.values())
         # validate the name
         self.name = self.file.get("name")
         if not self.name:
             raise self.GitComponentException("'name' field is missing")
 
-        self.get_root_location()
 
         print(f"Processing {self.name!r}")
 
@@ -553,7 +565,7 @@ class GitComponent:
         info = None
         store_dir = None
 
-        if self.args.check_changes_from_commit and not self.has_changes(locations):
+        if self.args.check_changes_from_commit and not self.has_changes(self.locations):
             return 0
 
         if self.args.install_check or self.args.update_check:
@@ -571,35 +583,15 @@ class GitComponent:
             cmp_name_slug = slugify(self.name)
             cmp_file_name = os.path.join(store_dir, f"{cmp_name_slug}.yml")
 
-            self._debug(f"git-hashes:")
-            # we MUST always sort the locations so that the result does not change when the order is different
-            locations = sorted(locations)
-            hashes = []
-            for loc in locations:
-                loc = os.path.join(self.cwd, loc)
-                cmd = ["git", "log", "-n1", '--format=%H', "--", loc]
-                resp = subprocess.check_output(cmd, cwd=self.cwd).decode("utf-8").strip()
-                if len(resp) == 0:
-                    raise self.GitComponentException(f"Could not get git hash from {loc}, is it under git control?")
-                self._debug(f"\t{loc} {resp!s}")
-                hashes.append(resp)
-            if len(hashes) == 0:
-                raise self.GitComponentException("There are no valid locations to get the hash")
-            elif len(hashes) == 1:
-                final_hash = hashes[0]
-            else:
-                hasher = hashlib.sha256()
-                for line in hashes:
-                    hasher.update(line.encode('utf-8'))
-                final_hash = hasher.hexdigest()
-            print(final_hash[:self.args.limit])
+            final_hash = self.__get_git_version()
+            print(final_hash)
 
             info = self._load_installation_info(cmp_file_name)
 
             if self.args.install_check and not info:
                 # we must run first the install, only then changelog
                 print(f"component {self.name} must be installed ...")
-                repos = self._get_repo_hash(locations)
+                repos = self._get_repo_hash(self.all_git_files_to_look)
                 for repo, repo_hash in repos.items():
                     print(f"Repo={repo} with repo_commit={repo_hash}")
 
@@ -627,7 +619,7 @@ class GitComponent:
                 print(f"Component {self.name!r} is up to date ...")
             else:
                 print(f"Component {self.name!r} must be updated ...")
-                repos = self._get_repo_hash(locations)
+                repos = self._get_repo_hash(self.all_git_files_to_look)
                 for repo, repo_hash in repos.items():
                     print(f"Repo={repo} with "
                           f"repo_commit={info['current_version']['repos'].get(repo, '')[:self.args.limit]} -> {repo_hash[:self.args.limit]}")
@@ -677,7 +669,7 @@ class GitComponent:
 
                 changelog = {}
                 unique_commit_hash = []
-                for loc in locations:
+                for loc in self.all_git_files_to_look:
                     loc = os.path.join(self.cwd, loc)
                     if os.path.isfile(loc):
                         repo_cwd = os.path.dirname(loc)
@@ -717,7 +709,7 @@ class GitComponent:
                 old_changelog_info['history'].insert(0, new_changelog_info)
                 with open(cmp_changelog_file_path, "w+") as f:
                     yaml.safe_dump(old_changelog_info, f)
-        self.process_cmds(locations, full_locations)
+        self.process_cmds()
 
 
 if __name__ == "__main__":
