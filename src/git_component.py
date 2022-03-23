@@ -27,11 +27,6 @@ location_root:  from where to start to copy locations
 locations:
   - relative/path/directory1
   - relative/path2/file1
-bin_files:  # list of files(or dict like below) to include into destination root of the package
-    - some/path/to/bin/file.py  # then the file.py will be copied to root of the package
-    -
-        src: some_path/bin.py
-        dst: main.py
 package-storage: path to the directory to store newly generated packages (relative or absolute)
 package-archive-type: tgz or zip
 package-info: a json object written to the package info.json file
@@ -49,16 +44,16 @@ update-script:  # list of scripts to run when the component needs update
   - bash commands
 update-dependencies-scripts:  # list of scripts to run when the component needs update
   run_on_change:
-    - nstick/be/requirement.pep3
-    - nstick/fe_ui/package.json
-    - nstick/fe_prm/package.json
+    - be/requirement.pep3
+    - fe_ui/package.json
+    - fe_prm/package.json
   run:
     - bash commands
 
 
 NOTE: if you have ideas how to improve this script just create an issue on https://github.com/SmartSoftDev/GBashLib
 
-# Run examples:
+# Run commands examples:
 
 git_component run_on_change -C update-scripts unittes-scripts ...
 git_component run_on_change -C update-dependencies-scripts
@@ -474,28 +469,6 @@ class GitComponent:
 
                 os.makedirs(src_dir, exist_ok=True)
 
-                for fpath in self.full_bin_files:
-                    src = fpath
-                    dst = None
-                    if isinstance(fpath, dict):
-                        src = fpath.get("src")
-                        dst = fpath.get("dst")
-                        if '/' in dst:
-                            raise Exception("Bin file dst={dst} must be just a file name, but it contains /")
-                    src = os.path.abspath(os.path.join(self.abs_location_root, src))
-                    if not os.path.isfile(src):
-                        raise Exception(f"bin files = {src} must always be a file!")
-                    src_rel_to_root = os.path.relpath(src, self.abs_location_root)
-                    if src_rel_to_root.startswith("../"):
-                        raise Exception(f"{src_rel_to_root} is outside location_root={self.location_root}")
-                    if not dst:
-                        dst = os.path.join(src_dir, fpath)
-                    else:
-                        dst = os.path.join(src_dir, dst)
-                    self._debug(f"copy bin file:{src} to {dst}")
-                    os.makedirs(os.path.dirname(dst), exist_ok=True)
-                    shutil.copy(src, dst)
-
                 copy_locations = self.full_locations + self.just_copy_files
                 for fpath in copy_locations:
                     src = fpath
@@ -565,10 +538,10 @@ class GitComponent:
         self.git_files = self.__get_location_list('git_only_files')
 
         _ , self.just_copy_files = self.__get_location_object_list('just_copy')
-        self.bin_files, self.full_bin_files = self.__get_location_object_list("bin_files")
+
         self.package_actions = self.file.get("package-actions", {})
 
-        self.all_git_files_to_look = self.locations + self.bin_files + self.git_files + list(self.package_actions.values())
+        self.all_git_files_to_look = self.locations + self.git_files + list(self.package_actions.values())
         # validate the name
         self.name = self.file.get("name")
         if not self.name:
