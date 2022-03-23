@@ -23,10 +23,6 @@ To ease automation the app will look to .git_component.yml file in current direc
 config file format:
 name: AppName
 git_tag_prefix: tag prefix to look for latest version, default ""
-install-scripts: # list of scripts to run when the component needs installation
-  - bash script
-update-script:  # list of scripts to run when the component needs update
-  - bash script
 location_root:  from where to start to copy locations
 locations:
   - relative/path/directory1
@@ -45,8 +41,31 @@ package-actions:
   uninstall: path_uninstall_script
   other_action: path_to_other_action
 
+# Bash commands lists
+# for example
+install-scripts: # list of scripts to run when the component needs installation
+  - bash commands
+update-script:  # list of scripts to run when the component needs update
+  - bash commands
+update-dependencies-scripts:  # list of scripts to run when the component needs update
+  run_on_change:
+    - nstick/be/requirement.pep3
+    - nstick/fe_ui/package.json
+    - nstick/fe_prm/package.json
+  run:
+    - bash commands
+
 
 NOTE: if you have ideas how to improve this script just create an issue on https://github.com/SmartSoftDev/GBashLib
+
+# Run examples:
+
+git_component run_on_change -C update-scripts unittes-scripts ...
+git_component run_on_change -C update-dependencies-scripts
+git_component get_changelog -o destination_file.yml
+
+# usefull find last version of deb file
+find . -type f -name 'crm_*.deb' | sort -r -V  | head -n1
 """
 import argparse
 import datetime
