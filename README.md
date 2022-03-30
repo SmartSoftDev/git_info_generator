@@ -4,7 +4,7 @@ Tools to use git information and automate CI/CD, packaging and release process.
 # git_component tool (GC tool)
 This tool can be used for several tasks during life cycle of a Project.
 - It can reliable compute Version strings based on [semver](https://semver.org) and `git describe` approach. A released version will always be only in semver format. But intermediate versions (development versions) will be in `git describe` format.
-- It can track git changes of a list of files or directories inside GIT repository. Additionally in can automatically compute the next semver version for the next release. This is useful in release automation pipelines.
+- It can track git changes of a list of files or directories inside GIT repository. Additionally, in can automatically compute the next semver version for the next release. This is useful in release automation pipelines.
 - It can reliable detect if a list of commands should or not be executed based on the tracking changes of specific files. The decision to run or not the commands can be computed based on the new version string. This is specially useful when deciding to redeploy the project or not. Or the run or not decision can be computed based on changes from a common ancestor commit (for example comparing it to origin/master commit). This is specially useful in CI/CD pipelines, where commands can be executed depending if there are changes compared to origin/master reference.
 - It offers a robust mechanism to package the project and keep single point of truth about project files. Since the project files are listed (for the change tracking), packaging action knows all the information to easily create a *.deb, .tar.gz or .zip package with the project
 - It can create precise changelog entries based on git history, for each version or deployment. Since the project files are listed (for the change tracking), a precise changelog from the git history can be computed. This filters only the commits relevant to this particular project.
@@ -23,7 +23,7 @@ Depending on the features other configuration fields can be added.
 ## Git changes tracking
 
 In order to track changes from git history each project should list all files or directories that are affecting this project.
-In such a way the GC tool can read the git history and decide wether it is affecting the project or not.
+In such a way the GC tool can read the git history and decide weather it is affecting the project or not.
 To configure the paths to the tracked files "location" field should be used like that:
 ```
 location:

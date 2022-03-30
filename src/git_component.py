@@ -2,7 +2,6 @@
 """
 Copyright (C) Smartsoftdev.eu SRL - All Rights Reserved
 For any license violations please contact: SmartSoftDev.eu
-
 """
 import argparse
 import datetime
@@ -12,7 +11,7 @@ import shutil
 import subprocess
 import sys
 from timeit import default_timer as timer
-from typing import List, Dict
+from typing import List
 
 import yaml
 
@@ -20,8 +19,10 @@ from utils import slugify, write_cfg_file, compose_build_commit_hash, get_last_t
 
 CHECKSUM_CHUNK_SIZE = 4096
 
+
 class AbortException(Exception):
     pass
+
 
 def args_parse():
     parser = argparse.ArgumentParser(
@@ -40,14 +41,14 @@ def args_parse():
     sp = subparsers.add_parser("run_on_new_version", help="Run if a new version is detected")
     sp.set_defaults(cmd="run_on_new_version")
     sp.add_argument('-C', '--changelog', action='store_true', default=None,
-                        help='Generate git history changelog from last execution until now.')
+                    help='Generate git history changelog from last execution until now.')
     sp.add_argument('-s', '--store_path', action='store', type=str, default=None,
-                        help='path to the directory to store current installation status for the components '
-                             '(default=/etc/_git_components/)')
+                    help='path to the directory to store current installation status for the components '
+                         '(default=/etc/_git_components/)')
     sp.add_argument('--user', action='store_true', default=None,
-                        help='sets path to installation status store to $HOME/.git_components/')
-    sp.add_argument('-p','--print_last_installed_version', action='store_true', default=None,
-                        help='Just prints last installed version')
+                    help='sets path to installation status store to $HOME/.git_components/')
+    sp.add_argument('-p', '--print_last_installed_version', action='store_true', default=None,
+                    help='Just prints last installed version')
     sp.add_argument('action_list_name',
                     help='the name of the action-list. for ex: unittest-scripts')
 
@@ -64,15 +65,13 @@ def args_parse():
     sp.add_argument('git_reference',
                     help='Git commit hash, branch or tag used as the start point for looking for changes')
 
-
     sp = subparsers.add_parser("next_version", help="Compute next patch | minor | major (default=patch) version. "
-                               "see https://semver.org")
+                                                    "see https://semver.org")
     sp.set_defaults(cmd="next_version")
     sp.add_argument('-m', '--minor', action='store_true', default=None,
                     help='Compute next Minor version')
     sp.add_argument('-M', '--major', action='store_true', default=None,
                     help='Compute next Major version')
-
 
     sp = subparsers.add_parser("pack", help="Create install package.")
     sp.set_defaults(cmd="pack")
@@ -90,7 +89,6 @@ def args_parse():
     sp.add_argument('-f', '--full', action='store_true', default=None,
                     help='Start from first commit of this component (default start from last tag)')
 
-
     return parser.parse_args()
 
 
@@ -98,7 +96,7 @@ def create_deb_package(gc, info, package_name, root_dir):
     package_size = 0
     for path, _, files in os.walk(root_dir):
         for f in files:
-            package_size += os.path.getsize(os.path.join(path,f))
+            package_size += os.path.getsize(os.path.join(path, f))
 
     package_file = f"{package_name}.deb"
     debian_dir = os.path.join(root_dir, "DEBIAN")
@@ -182,6 +180,13 @@ class GitComponent:
         self.git_version = None
         self.git_tag = None
         self.git_tag_version = None
+        self.abs_location_root = None
+        self.locations = []
+        self.full_locations = []
+        self.just_copy_files = []
+        self.git_files = []
+        self.all_git_files_to_look = []
+        self.package_actions = {}
 
     def _get_repo_hash(self, locations):
         repos = dict()
@@ -296,23 +301,23 @@ class GitComponent:
             if isinstance(el, dict):
                 if not (el.get("src") and el.get("dst")) and not (len(el.get("src")) and len(el.get("dst"))):
                     raise AbortException(f"'{field}' must contain list of str or dict with non empty "
-                                                     f"src' and 'dst' keys")
+                                         f"src' and 'dst' keys")
             elif isinstance(el, (int, float, str)):
                 if not len(el):
                     raise AbortException(f"'{field}' contains empty strings")
             else:
                 raise AbortException(f"'{field}' must contain list of str or dict with non empty "
-                                                 f"'src' and 'dst' keys")
+                                     f"'src' and 'dst' keys")
         path_list = [el.get("src") if isinstance(el, dict) else el for el in component_field]
         return path_list, component_field
 
     def __get_paths_to_git_check(self, locations=None):
         # deduplicate
-        build_commit_hash_file_list = []
+        build_commit_hash_file_list = [os.path.relpath(self.real_cfg_file, self.abs_location_root)]
         # we always have to add .git_component.yml file
-        build_commit_hash_file_list.append(os.path.relpath(self.real_cfg_file, self.abs_location_root))
         for fpath in locations or self.all_git_files_to_look:
-            fpath = os.path.relpath(os.path.abspath(os.path.join(self.abs_location_root, fpath)), self.abs_location_root)
+            fpath = os.path.relpath(os.path.abspath(os.path.join(self.abs_location_root, fpath)),
+                                    self.abs_location_root)
             if fpath.startswith("../"):
                 raise Exception(f"'{fpath}' outside root location")
             if fpath not in build_commit_hash_file_list:
@@ -333,16 +338,17 @@ class GitComponent:
             if check_dirty:
                 changes = self.has_changes(files_to_check)
                 if len(changes):
-                    raise Exception(f"Refusing to continue, following git files have local changes (dirty state):\n{changes}")
+                    raise Exception(
+                        f"Refusing to continue, following git files have local changes (dirty state):\n{changes}")
             prefix = self.file.get("git_tab_prefix", "")
             self.git_tag = get_last_tag(self.cwd, _filter=f"{prefix}*")  # for git list we need glob *
             if self.git_tag:
                 self.git_tag_version = self.git_tag[prefix:]
 
             build_commit_hash = compose_build_commit_hash(self.abs_location_root,
-                                                            self.git_tag,
-                                                            files_to_check,
-                                                            self.args.limit)
+                                                          self.git_tag,
+                                                          files_to_check,
+                                                          self.args.limit)
             ret = f"{self.git_tag or '0.0.0'}{build_commit_hash}"
             if locations is None:
                 self.git_version = ret
@@ -369,26 +375,28 @@ class GitComponent:
             self.abs_location_root = os.path.abspath(os.path.join(self.cwd, self.location_root))
         self._debug(f"location root: {self.abs_location_root}")
 
-
     def process_cmds(self):
         cmd = getattr(self.args, 'cmd', 'all')
         method_name = f"_cmd_{cmd}"
         try:
             method = self.__getattribute__(method_name)
         except AttributeError:
-             raise Exception(f"Received unknown cmd={cmd}")
+            raise Exception(f"Received unknown cmd={cmd}")
         method()
 
     def __get_git_changes_since(self, git_reference):
         cmd = ["git", "diff", "--name-only", f"{git_reference}..HEAD", "--"]
-        resp = [line.strip() for line in subprocess.check_output(cmd, cwd=self.abs_location_root).decode("utf-8").strip().split("\n") if line.strip()]
+        resp = [line.strip() for line in
+                subprocess.check_output(cmd, cwd=self.abs_location_root).decode("utf-8").strip().split("\n") if
+                line.strip()]
         return resp
 
     def __check_changed_files_against_paths_to_check(self, changed_files, paths_to_check):
         changed = False
         for check_path in paths_to_check:
             if os.path.isdir(os.path.join(self.abs_location_root, check_path)):
-                check_path = os.path.relpath(os.path.join(self.abs_location_root, check_path), self.abs_location_root) + "/"
+                check_path = os.path.relpath(os.path.join(self.abs_location_root, check_path),
+                                             self.abs_location_root) + "/"
                 for changed_file in changed_files:
                     if changed_file.startswith(check_path):
                         changed = True
@@ -410,6 +418,7 @@ class GitComponent:
         changed = self.__check_changed_files_against_paths_to_check(changed_files, files_to_check)
         if changed:
             already_executed_actions = []
+
             def _execute_one_action(action):
                 nonlocal changed_files
                 already_executed_actions.append(action)
@@ -423,7 +432,8 @@ class GitComponent:
                     depends = scripts.get("depends", [])
                     for dependency in depends:
                         if dependency in already_executed_actions:
-                            raise Exception(f"Circular dependency detected: Action list '{action}' depends on '{dependency}' but '{dependency}' already executed ...")
+                            raise Exception(f"Circular dependency detected: Action list '{action}' "
+                                            f"depends on '{dependency}' but '{dependency}' already executed ...")
                         _execute_one_action(dependency)
                     git_files = scripts.get("git_files")
                     scripts = scripts.get("run", [])
@@ -450,7 +460,6 @@ class GitComponent:
                 # end of _execute_one_action
 
             _execute_one_action(self.args.action_list_name)
-
 
     def _cmd_next_version(self):
         self.__get_git_version()
@@ -481,15 +490,13 @@ class GitComponent:
             ndx = 0
             vers[1] = vers[2] = "0"
         try:
-            vers[ndx] = str(int(vers[ndx])+1)
+            vers[ndx] = str(int(vers[ndx]) + 1)
         except Exception:
             raise Exception(f"Could not convert and increase an integer the version={ver_str}")
         print(".".join(vers))
 
     def _cmd_run_on_new_version(self):
-        cmp_name_slug = None
         info = None
-        store_dir = None
 
         # we need to need to check the install or/and update scripts
         store_dir = '/etc/_git_components/'
@@ -507,6 +514,7 @@ class GitComponent:
             "from_path": os.path.abspath(self.cfg_file),
         }
         already_executed_actions = []
+
         def _execute_one_action(action):
             nonlocal info
             already_executed_actions.append(action)
@@ -519,7 +527,8 @@ class GitComponent:
                 depends = scripts.get("depends", [])
                 for dependency in depends:
                     if dependency in already_executed_actions:
-                        raise Exception(f"Circular dependency detected: Action list '{action}' depends on '{dependency}' but '{dependency}' already executed ...")
+                        raise Exception(f"Circular dependency detected: Action list '{action}' "
+                                        f"depends on '{dependency}' but '{dependency}' already executed ...")
                     _execute_one_action(dependency)
                 git_version = self.__get_git_version(True, scripts.get("git_files"))
                 scripts = scripts.get("run", [])
@@ -538,17 +547,18 @@ class GitComponent:
             if last_exec_version == git_version:
                 print(f"Action list '{action}' was already executed for version={git_version}")
                 return
-            print(f"Action list '{action}' must execute for current version='{git_version}', last executed version='{last_exec_version}'")
+            print(f"Action list '{action}' must execute for current version='{git_version}',"
+                  f" last executed version='{last_exec_version}'")
             scripts_res, scripts_duration = self._run_scripts(scripts)
             print(f"Action list '{action}' of component={self.name!r} has "
                   f"{'succeeded' if scripts_res == 0 else 'FAILED'}")
             if scripts_res == 0:
                 info = self._save_execution_info(
-                                info,
-                                action,
-                                git_version,
-                                scripts_duration,
-                            )
+                    info,
+                    action,
+                    git_version,
+                    scripts_duration,
+                )
             # end of _execute_one_action
 
         _execute_one_action(self.args.action_list_name)
@@ -593,7 +603,7 @@ class GitComponent:
                     resp = subprocess.check_output(cmd, cwd=repo_cwd).decode("utf-8").strip()
                     if len(resp) == 0:
                         raise AbortException(f"Could not get git remote repo from {loc},"
-                                                         f" is it under git control?")
+                                             f" is it under git control?")
                     repo = resp
                     loc = os.path.join(self.cwd, loc)
                     cmd = ["git", "log", '--format=_#._%H|$.|%aN|$.|%aI|$.|%s|$.|%b']
@@ -630,10 +640,9 @@ class GitComponent:
         else:
             scripts_res, install_duration = self._run_scripts(inst_scripts)
             print(f"{tests_type.capitalize()} of component={self.name!r} has "
-                    f"{'succeeded' if scripts_res == 0 else 'FAILED'}")
+                  f"{'succeeded' if scripts_res == 0 else 'FAILED'}")
             if scripts_res != 0:
                 return scripts_res
-
 
     def _cmd_pack(self):
         if not self.file.get("package"):
@@ -677,11 +686,11 @@ class GitComponent:
                 file_extension = f'{package_dir}.zip'
             if os.path.isfile(file_extension):
                 print(f"Version {package_version} already exists here {file_extension}")
-                return 0
+                return
         else:
             if os.path.isdir(package_dir):
                 print(f"Version {package_version} already exists here {package_dir}")
-                return 0
+                return
 
         # after we know new file must be created run some scripts to prepare the package internally
         package_scripts = self.file.get("package-scripts", [])
@@ -690,7 +699,7 @@ class GitComponent:
         else:
             scripts_res, install_duration = self._run_scripts(package_scripts)
             print(f"package_scripts={self.name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'} "
-                    f"duration={install_duration}")
+                  f"duration={install_duration}")
 
         os.makedirs(package_dir, exist_ok=True)
         if arch_type == 'deb':
@@ -747,9 +756,8 @@ class GitComponent:
         write_cfg_file(os.path.join(src_dir, 'info.json'), meta_data, human_readable=True)
         if arch_type:
             create_package(self, meta_data, arch_type, package_dir, self.args.keep_storage_dir)
-        return 0
 
-    def has_changes(self, files_to_check) -> bool:
+    def has_changes(self, files_to_check) -> str:
         # let's check if there are changes since this commit
         cmd = ["git", "diff", "--name-only", "--"] + files_to_check
         resp = subprocess.check_output(cmd, cwd=self.abs_location_root).decode("utf-8").strip()
@@ -761,7 +769,7 @@ class GitComponent:
         self.locations, self.full_locations = self.__get_location_object_list("locations")
         self.git_files = self.__get_location_list('git_only_files')
 
-        _ , self.just_copy_files = self.__get_location_object_list('just_copy')
+        _, self.just_copy_files = self.__get_location_object_list('just_copy')
 
         self.package_actions = self.file.get("package-actions", {})
 
@@ -773,11 +781,11 @@ class GitComponent:
         self.get_root_location()
 
         self.process_cmds()
-
+        return 0
 
 
 if __name__ == "__main__":
     try:
         sys.exit(GitComponent(args_parse()).run())
     except AbortException as e:
-        print(f"FATAL: {e}",)
+        print(f"FATAL: {e}", )
