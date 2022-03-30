@@ -32,10 +32,10 @@ def get_last_tag(cwd, _filter: str) -> Union[None, str]:
 
 def compose_build_commit_hash(cwd, tag, files: List, hash_limit=7) -> str:
     commits_hashes = []
-    cmd = ["git", "log", "--format=%h", "--", *files]
+    cmd = ["git", "log", "--format=%H", "--", *files]
     if tag:
         # get all commits hashes from last tag until head
-        cmd = ["git", "log", "--format=%h", f"{tag}..HEAD", "--", *files]
+        cmd = ["git", "log", "--format=%H", f"{tag}..HEAD", "--", *files]
     try:
         commits_hashes = subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError:
