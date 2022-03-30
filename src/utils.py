@@ -22,7 +22,14 @@ def get_last_tag(cwd, _filter: str) -> Union[None, str]:
     cmd = ["git", "tag", "--list", _filter, "--merged"]
     tags = []
     try:
-        tags = subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT)
+        tags = [
+            line.strip()
+            for line in subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT)
+            .decode("utf-8")
+            .strip()
+            .split("\n")
+            if line.strip()
+        ]
     except subprocess.CalledProcessError:
         print(f"Found no tags for {_filter} pattern.")
     if tags:

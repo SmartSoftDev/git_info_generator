@@ -492,11 +492,9 @@ class GitComponent:
                         f"Refusing to continue, following git files have local changes (dirty state):\n{changes}"
                     )
             prefix = self.file.get("git_tag_prefix", "")
-            self.git_tag = get_last_tag(
-                self.cwd, _filter=f"{prefix}*"
-            )  # for git list we need glob *
+            self.git_tag = get_last_tag(self.cwd, _filter=f"{prefix}*")  # for git list we need glob *
             if self.git_tag:
-                self.git_tag_version = self.git_tag[prefix:]
+                self.git_tag_version = self.git_tag[len(prefix):]
 
             build_commit_hash = compose_build_commit_hash(
                 self.abs_location_root, self.git_tag, files_to_check, self.args.limit
