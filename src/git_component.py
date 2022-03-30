@@ -141,6 +141,13 @@ def args_parse():
     )
     sp.set_defaults(cmd="next_version")
     sp.add_argument(
+        "-t",
+        "--git_tag",
+        action="store_true",
+        default=None,
+        help="Include the git tag prefix in the next version",
+    )
+    sp.add_argument(
         "-m",
         "--minor",
         action="store_true",
@@ -484,7 +491,7 @@ class GitComponent:
                     raise Exception(
                         f"Refusing to continue, following git files have local changes (dirty state):\n{changes}"
                     )
-            prefix = self.file.get("git_tab_prefix", "")
+            prefix = self.file.get("git_tag_prefix", "")
             self.git_tag = get_last_tag(
                 self.cwd, _filter=f"{prefix}*"
             )  # for git list we need glob *
@@ -641,41 +648,48 @@ class GitComponent:
 
     def _cmd_next_version(self):
         self.__get_git_version()
+        ret_version = ""
+        prefix = self.file.get("git_tag_prefix", "")
         if not self.git_tag:
             if self.args.minor:
-                print("0.1.0")
+                ret_version = "0.1.0"
             elif self.args.major:
-                print("1.0.0")
+                ret_version = "1.0.0"
             else:
-                print("0.0.1")
-            return
-        ver_str = self.git_tag_version
-        # ver_str = "1.2.3"
-        ndx = ver_str.find("-")
-        if ndx >= 0:
-            ver_str = ver_str[:ndx]
-        ndx = ver_str.find("_")
-        if ndx >= 0:
-            ver_str = ver_str[:ndx]
-        vers = ver_str.split(".")
-        if len(vers) != 3:
-            raise Exception(
-                f"Version='{ver_str}' must have 3 components but it has only {len(vers)}"
-            )
-        ndx = 2
-        if self.args.minor:
-            ndx = 1
-            vers[2] = "0"
-        elif self.args.major:
-            ndx = 0
-            vers[1] = vers[2] = "0"
-        try:
-            vers[ndx] = str(int(vers[ndx]) + 1)
-        except Exception:
-            raise Exception(
-                f"Could not convert and increase an integer the version={ver_str}"
-            )
-        print(".".join(vers))
+                ret_version = "0.0.1"
+        else:
+            ver_str = self.git_tag_version
+            # ver_str = "1.2.3"
+            ndx = ver_str.find("-")
+            if ndx >= 0:
+                ver_str = ver_str[:ndx]
+            ndx = ver_str.find("_")
+            if ndx >= 0:
+                ver_str = ver_str[:ndx]
+            vers = ver_str.split(".")
+            if len(vers) != 3:
+                raise Exception(
+                    f"Version='{ver_str}' must have 3 components but it has only {len(vers)}"
+                )
+            ndx = 2
+            if self.args.minor:
+                ndx = 1
+                vers[2] = "0"
+            elif self.args.major:
+                ndx = 0
+                vers[1] = vers[2] = "0"
+            try:
+                vers[ndx] = str(int(vers[ndx]) + 1)
+            except Exception:
+                raise Exception(
+                    f"Could not convert and increase an integer the version={ver_str}"
+                )
+            ret_version = ".".join(vers)
+        if self.args.git_tag:
+            print(f"{prefix}{ret_version}")
+        else:
+            print(ret_version)
+
 
     def _cmd_run_on_new_version(self):
         info = None
