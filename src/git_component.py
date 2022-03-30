@@ -53,12 +53,16 @@ def args_parse():
 
     sp = subparsers.add_parser("run_on_change", help="Run if a change from common ancestor commit is detected")
     sp.set_defaults(cmd="run_on_change")
-    sp.add_argument('commit_hash',
-                    help='Commit hash, the start point for looking for changes')
+    sp.add_argument('git_reference',
+                    help='Git commit hash, branch or tag used as the start point for looking for changes')
 
     sp.add_argument('action_list_name',
                     help='the name of the action-list. for ex: unittest-scripts')
 
+    sp = subparsers.add_parser("show_changes_since", help="Print git changes on component files ")
+    sp.set_defaults(cmd="show_changes_since")
+    sp.add_argument('git_reference',
+                    help='Git commit hash, branch or tag used as the start point for looking for changes')
 
 
     sp = subparsers.add_parser("next_version", help="Compute next patch | minor | major (default=patch) version. "
@@ -176,6 +180,8 @@ class GitComponent:
         self.destination_root = ""
         self.location_root = None
         self.git_version = None
+        self.git_tag = None
+        self.git_tag_version = None
 
     def _get_repo_hash(self, locations):
         repos = dict()
@@ -303,6 +309,8 @@ class GitComponent:
     def __get_paths_to_git_check(self, locations=None):
         # deduplicate
         build_commit_hash_file_list = []
+        # we always have to add .git_component.yml file
+        build_commit_hash_file_list.append(os.path.relpath(self.real_cfg_file, self.abs_location_root))
         for fpath in locations or self.all_git_files_to_look:
             fpath = os.path.relpath(os.path.abspath(os.path.join(self.abs_location_root, fpath)), self.abs_location_root)
             if fpath.startswith("../"):
@@ -315,7 +323,6 @@ class GitComponent:
             check_path = os.path.join(self.abs_location_root, fpath)
             if not os.path.islink(check_path) and not os.path.exists(check_path):
                 raise Exception(f"File does not exist: {os.path.join(self.abs_location_root, fpath)}")
-
         return build_commit_hash_file_list
 
     def __get_git_version(self, check_dirty=False, locations: list = None):
@@ -328,13 +335,15 @@ class GitComponent:
                 if len(changes):
                     raise Exception(f"Refusing to continue, following git files have local changes (dirty state):\n{changes}")
             prefix = self.file.get("git_tab_prefix", "")
-            last_tag = get_last_tag(self.cwd, _filter=f"{prefix}*")  # for git list we need glob *
+            self.git_tag = get_last_tag(self.cwd, _filter=f"{prefix}*")  # for git list we need glob *
+            if self.git_tag:
+                self.git_tag_version = self.git_tag[prefix:]
 
             build_commit_hash = compose_build_commit_hash(self.abs_location_root,
-                                                            last_tag,
+                                                            self.git_tag,
                                                             files_to_check,
                                                             self.args.limit)
-            ret = f"{last_tag or '0.0.0'}{build_commit_hash}"
+            ret = f"{self.git_tag or '0.0.0'}{build_commit_hash}"
             if locations is None:
                 self.git_version = ret
         return ret
@@ -370,6 +379,112 @@ class GitComponent:
              raise Exception(f"Received unknown cmd={cmd}")
         method()
 
+    def __get_git_changes_since(self, git_reference):
+        cmd = ["git", "diff", "--name-only", f"{git_reference}..HEAD", "--"]
+        resp = [line.strip() for line in subprocess.check_output(cmd, cwd=self.abs_location_root).decode("utf-8").strip().split("\n") if line.strip()]
+        return resp
+
+    def __check_changed_files_against_paths_to_check(self, changed_files, paths_to_check):
+        changed = False
+        for check_path in paths_to_check:
+            if os.path.isdir(os.path.join(self.abs_location_root, check_path)):
+                check_path = os.path.relpath(os.path.join(self.abs_location_root, check_path), self.abs_location_root) + "/"
+                for changed_file in changed_files:
+                    if changed_file.startswith(check_path):
+                        changed = True
+                        break
+            else:
+                if check_path in changed_files:
+                    changed = True
+                    break
+        return changed
+
+    def _cmd_show_changes_since(self):
+        changed_files = self.__get_git_changes_since(self.args.git_reference)
+        for changed_file in changed_files:
+            print(changed_file)
+
+    def _cmd_run_on_change(self):
+        changed_files = self.__get_git_changes_since(self.args.git_reference)
+        files_to_check = self.__get_paths_to_git_check()
+        changed = self.__check_changed_files_against_paths_to_check(changed_files, files_to_check)
+        if changed:
+            already_executed_actions = []
+            def _execute_one_action(action):
+                nonlocal changed_files
+                already_executed_actions.append(action)
+                depends = False
+                file_scripts = self.file.get("scripts", {})
+                scripts = file_scripts.get(action, [])
+                git_files = None
+                if isinstance(scripts, list):
+                    pass
+                elif isinstance(scripts, dict):
+                    depends = scripts.get("depends", [])
+                    for dependency in depends:
+                        if dependency in already_executed_actions:
+                            raise Exception(f"Circular dependency detected: Action list '{action}' depends on '{dependency}' but '{dependency}' already executed ...")
+                        _execute_one_action(dependency)
+                    git_files = scripts.get("git_files")
+                    scripts = scripts.get("run", [])
+                else:
+                    raise Exception(f"Action list '{action}' must be a list or dict not {type(scripts)}")
+                if not scripts or len(scripts) == 0:
+                    if depends:
+                        print(f"Nothing to run for {self.name}: '{action}' but {depends} dependencies are executed")
+                    else:
+                        print(f"Nothing to run for {self.name}: '{action}' is empty or missing")
+                    return
+
+                # check if there is git_files and verify if they change
+
+                if git_files:
+                    changed = self.__check_changed_files_against_paths_to_check(changed_files, git_files)
+                    if not changed:
+                        print(f"Action list '{action}' has no changes detected")
+                        return
+
+                scripts_res, scripts_duration = self._run_scripts(scripts)
+                print(f"Action list '{action}' of component={self.name!r} has changes and must execute: "
+                      f"{'succeeded' if scripts_res == 0 else 'FAILED'} in {scripts_duration} sec")
+                # end of _execute_one_action
+
+            _execute_one_action(self.args.action_list_name)
+
+
+    def _cmd_next_version(self):
+        self.__get_git_version()
+        if not self.git_tag:
+            if self.args.minor:
+                print("0.1.0")
+            elif self.args.major:
+                print("1.0.0")
+            else:
+                print("0.0.1")
+            return
+        ver_str = self.git_tag_version
+        # ver_str = "1.2.3"
+        ndx = ver_str.find('-')
+        if ndx >= 0:
+            ver_str = ver_str[:ndx]
+        ndx = ver_str.find('_')
+        if ndx >= 0:
+            ver_str = ver_str[:ndx]
+        vers = ver_str.split(".")
+        if len(vers) != 3:
+            raise Exception(f"Version='{ver_str}' must have 3 components but it has only {len(vers)}")
+        ndx = 2
+        if self.args.minor:
+            ndx = 1
+            vers[2] = "0"
+        elif self.args.major:
+            ndx = 0
+            vers[1] = vers[2] = "0"
+        try:
+            vers[ndx] = str(int(vers[ndx])+1)
+        except Exception:
+            raise Exception(f"Could not convert and increase an integer the version={ver_str}")
+        print(".".join(vers))
 
     def _cmd_run_on_new_version(self):
         cmp_name_slug = None
@@ -655,11 +770,9 @@ class GitComponent:
         self.name = self.file.get("name")
         if not self.name:
             raise AbortException("'name' field is missing")
-        print(f"Processing {self.name!r}")
         self.get_root_location()
 
         self.process_cmds()
-
 
 
 
