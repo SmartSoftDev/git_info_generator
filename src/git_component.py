@@ -207,13 +207,7 @@ def create_deb_package(gc, info, package_name, root_dir):
         for f in files:
             package_size += os.path.getsize(os.path.join(path, f))
 
-    #check mandatory fields to be checked
-    mandatory_deb_fields = ["Architecture", "Maintainer", "Description"]
-    for mf in mandatory_deb_fields:
-        if not gc.file.get(f"deb-{mf}"):
-            raise Exception(f"Mandatory field deb-{mf} is missing in configuration")
-    arch = gc.file.get('deb-Architecture')
-    package_file = f"{package_name}_{arch}.deb"
+    package_file = f"{package_name}.deb"
     debian_dir = os.path.join(root_dir, "DEBIAN")
     os.makedirs(debian_dir, exist_ok=True)
     os.chdir(debian_dir)
@@ -910,6 +904,13 @@ class GitComponent:
             if arch_type == "tgz":
                 file_extension = f"{package_dir}.tar.gz"
             elif arch_type == "deb":
+                #check mandatory fields to be checked
+                mandatory_deb_fields = ["Architecture", "Maintainer", "Description"]
+                for mf in mandatory_deb_fields:
+                    if not self.file.get(f"deb-{mf}"):
+                        raise Exception(f"Mandatory field deb-{mf} is missing in configuration")
+                arch = self.file.get('deb-Architecture')
+                package_dir=f"{package_dir}_{arch}"
                 file_extension = f"{package_dir}.deb"
             else:
                 file_extension = f"{package_dir}.zip"
