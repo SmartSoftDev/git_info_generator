@@ -207,7 +207,13 @@ def create_deb_package(gc, info, package_name, root_dir):
         for f in files:
             package_size += os.path.getsize(os.path.join(path, f))
 
-    package_file = f"{package_name}.deb"
+    #check mandatory fields to be checked
+    mandatory_deb_fields = ["Architecture", "Maintainer", "Description"]
+    for mf in mandatory_deb_fields:
+        if not gc.file.get(f"deb-{mf}"):
+            raise Exception(f"Mandatory field deb-{mf} is missing in configuration")
+    arch = gc.file.get('deb-Architecture')
+    package_file = f"{package_name}_{arch}.deb"
     debian_dir = os.path.join(root_dir, "DEBIAN")
     os.makedirs(debian_dir, exist_ok=True)
     os.chdir(debian_dir)
