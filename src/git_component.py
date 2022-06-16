@@ -169,7 +169,13 @@ def args_parse():
         default=None,
         help="Keep storage directory even if archive package was chosen",
     )
-
+    sp.add_argument(
+        "-p",
+        "--print_current_file_path",
+        action="store_true",
+        default=None,
+        help="Print current package file path",
+    )
     sp = subparsers.add_parser("generate_changelog", help="Will generate changelog entries from git history")
     sp.set_defaults(cmd="gen_changelog")
 
@@ -821,13 +827,17 @@ class GitComponent:
             else:
                 file_extension = f"{package_dir}.zip"
             if os.path.isfile(file_extension):
-                print(f"Version {package_version} already exists here {file_extension}")
+                if self.args.print_current_file_path:
+                    print(f"{file_extension}")
+                else:
+                    print(f"Version {package_version} already exists here {file_extension}")
                 return
         else:
             if os.path.isdir(package_dir):
                 print(f"Version {package_version} already exists here {package_dir}")
                 return
-
+        if self.args.print_current_file_path:
+            return
         # after we know new file must be created run some scripts to prepare the package internally
         package_scripts = self.file.get("package-scripts", [])
         if not package_scripts or not len(package_scripts):
