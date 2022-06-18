@@ -848,6 +848,8 @@ class GitComponent:
                 f"package_scripts={self.name!r} has {'succeeded' if scripts_res == 0 else 'FAILED'} "
                 f"duration={install_duration}"
             )
+            if scripts_res != 0:
+                raise AbortException("package-scripts has fail")
 
         os.makedirs(package_dir, exist_ok=True)
         if arch_type == "deb":
