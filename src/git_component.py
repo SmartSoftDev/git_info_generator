@@ -203,13 +203,30 @@ def create_deb_package(gc, info, package_name, root_dir):
     with open("control", "w+") as f:
         for k, v in gc.file.items():
             if k.startswith("deb-"):
-                f.write(f"{k[4:]}: {v.strip()}\n")
+                deb_key = k[4:]
+                deb_value = v.strip()
+                if deb_key == "Depends":
+                    depends = [i.strip() for i in deb_value.split(",")]
+                    # let's see if there is some files to include
+                    for incl_fpath in gc.file.get("include-deb-Depends", []):
+                        fpath = os.path.join(gc.abs_location_root, incl_fpath)
+                        with open(fpath) as dd_f:
+                            # the file format MUST be one dependency per line, without ","
+                            for dd_line in dd_f.readlines():
+                                new_deb_value = dd_line.strip()
+                                # deduplicate
+                                if new_deb_value not in depends:
+                                    # better to prepend here instead of append
+                                    depends.insert(0, new_deb_value)
+                    deb_value = ",".join(depends)
+                f.write(f"{deb_key}: {deb_value}\n")
         f.write(f"Version: {info.get('version')}\n")
         f.write(f"Package: {gc.name}\n")
         f.write(f"Installed-Size: {package_size}\n")
 
     os.chdir(os.path.dirname(root_dir))
-    subprocess.check_output(f"dpkg-deb --build {root_dir}", shell=True)
+    subprocess.check_call(f"dpkg-deb --build {root_dir}", shell=True)
+    subprocess.check_call(f"dpkg-deb -I {package_file}", shell=True)
     return package_file
 
 
@@ -430,11 +447,25 @@ class GitComponent:
             if fpath not in build_commit_hash_file_list:
                 build_commit_hash_file_list.append(fpath)
 
-        self._debug(f"check build commit hash on files: {build_commit_hash_file_list}")
+        self._debug(f"check build commit hash on {len(build_commit_hash_file_list)} files")
+        files_missing_check_ignored = []
         for fpath in build_commit_hash_file_list:
             check_path = os.path.join(self.abs_location_root, fpath)
             if not os.path.islink(check_path) and not os.path.exists(check_path):
-                raise Exception(f"File does not exist: {os.path.join(self.abs_location_root, fpath)}")
+                files_missing_check_ignored.append(check_path)
+        if files_missing_check_ignored:
+            # if file are missing and are in gitignore then do not raise error
+            cmd = ["git", "check-ignore"] + files_missing_check_ignored
+            files_missing_check_ignored_confirmed = [
+                i.strip()
+                for i in subprocess.check_output(cmd, cwd=self.abs_location_root, stderr=subprocess.STDOUT)
+                .decode("utf-8")
+                .strip()
+                .split("\n")
+            ]
+            for fpath in files_missing_check_ignored:
+                if fpath not in files_missing_check_ignored_confirmed:
+                    raise Exception(f"File does not exist: {os.path.join(self.abs_location_root, fpath)}")
         return build_commit_hash_file_list
 
     def __get_git_version(self, check_dirty=False, locations: list = None):
