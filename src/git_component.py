@@ -411,16 +411,24 @@ class GitComponent:
         return ret
 
     def __get_location_object_list(self, field):
-        component_field = self.file.get(field, [])
-        if component_field is None:
+        pre_component_field = self.file.get(field, [])
+        if pre_component_field is None:
             raise AbortException(f"Config file has no '{field}' list!")
-        if not isinstance(component_field, list):
-            raise AbortException(f"'{field}' field from config file MUST be a list!")
+        if not isinstance(pre_component_field, list):
+            raise pre_component_field(f"'{field}' field from config file MUST be a list!")
+        component_field = []
+        for el in pre_component_field:
+            if isinstance(el, dict):
+                new_src = el.get("to_root")
+                if new_src:
+                    el = {"src": new_src, "dst": os.path.basename(new_src)}
+            component_field.append(el)
+
         for el in component_field:
             if isinstance(el, dict):
                 if not (el.get("src") and el.get("dst")) and not (len(el.get("src")) and len(el.get("dst"))):
                     raise AbortException(
-                        f"'{field}' must contain list of str or dict with non empty " f"src' and 'dst' keys"
+                        f"'{field}' must contain list of str or dict with non empty 'src' and 'dst' keys"
                     )
             elif isinstance(el, (int, float, str)):
                 if not len(el):
@@ -952,7 +960,6 @@ class GitComponent:
         _, self.just_copy_files = self.__get_location_object_list("just_copy")
 
         self.package_actions = self.file.get("package-actions", {})
-
         self.all_git_files_to_look = self.locations + self.git_files + list(self.package_actions.values())
         # validate the name
         self.name = self.file.get("name")
