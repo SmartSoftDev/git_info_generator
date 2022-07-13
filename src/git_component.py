@@ -466,8 +466,8 @@ class GitComponent:
             cmd = ["git", "check-ignore"] + files_missing_check_ignored
             files_missing_check_ignored_confirmed = [
                 i.strip()
-                for i in subprocess.check_output(cmd, cwd=self.abs_location_root, stderr=subprocess.STDOUT)
-                .decode("utf-8")
+                for i in subprocess.run(cmd, cwd=self.abs_location_root, check=False, stdout=subprocess.PIPE)
+                .stdout.decode("utf-8")
                 .strip()
                 .split("\n")
             ]
