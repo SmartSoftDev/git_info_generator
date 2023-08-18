@@ -9,44 +9,44 @@
         <link rel="canonical" href="https://jinja.palletsprojects.com/en/2.11.x/intro/"/>
     </head>
     <body>
-        <ul>
+        <ol type="I">
             {% for item in history %}
                 <li>
-                    {{ item["utctime"] }}
-                    ({{ item["hash"][:10] }})
+                    {{ item["generated_at"] }}
+                    ({{ item["final_hash"][:10] }})
 
-                    <ul>
+                    <ol type="A">
                         {% for repo, commits  in item['changelog'].items() %}
                             <li>
                                 <a href="">{{ repo }}</a>
-                                <ul>
+                                <ol type="1">
                                     {% for commit in commits %}
                                         <li>
                                             <a href="">{{ commit['hash'][:8] }}
                                             </a>
 
                                             {{ commit['subject'] }}
-                                            ({{ commit['author'] }})-
-                                            {{ commit['time'] }}
 
                                             {% if commit['body']|length %}
 
 
                                                 <ul>
+                                                    <li>{{ commit['author'] }}</li>
+                                                    <li>{{ commit['time'] }}</li>
                                                     <li>{{ commit['body'] }}</li>
                                                 </ul>
                                             {% endif %}
 
                                         </li>
                                     {% endfor %}
-                                </ul>
+                                </ol>
                             </li>
                         {% endfor %}
-                    </ul>
+                    </ol>
                 </li>
 
 
             {% endfor %}
-        </ul>
+        </ol>
     </body>
 </html></body></html></body></html></body></html>

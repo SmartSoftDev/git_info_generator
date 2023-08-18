@@ -20,30 +20,27 @@ from jinja2 import Environment, PackageLoader, select_autoescape
 
 
 def slugify(text):
-    return re.sub(r'[\W_]+', '-', text)
+    return re.sub(r"[\W_]+", "-", text)
 
 
 class ChangelogSimpleHtml:
     class ChangeLogException(Exception):
         pass
 
-    DEF_CMP_FILE_NAME = '.git_component.yml'
-    DEF_GLOBAL_STORE_DIR = '/etc/_git_components/'
-    DEF_USER_STORE_DIR = '.git_components/'
-    CHANGELOG_FILE_NAME = '{cmp_name_slug}_changelog.yml'
+    DEF_CMP_FILE_NAME = ".git_component.yml"
+    DEF_GLOBAL_STORE_DIR = "/etc/_git_components/"
+    DEF_USER_STORE_DIR = ".git_components/"
+    CHANGELOG_FILE_NAME = "{cmp_name_slug}_changelog.yml"
 
     def __init__(self, args):
         self.args = args
         self.out = args.out
         if not os.path.exists(self.out):
-            out_dir = os.path.dirname(self.out)
+            out_dir = os.path.dirname(os.path.abspath(self.out))
             if not os.path.exists(out_dir):
                 os.makedirs(out_dir)
 
-        self.j_env = Environment(
-            loader=PackageLoader('tpls', '.'),
-            autoescape=select_autoescape(['html', 'xml'])
-        )
+        self.j_env = Environment(loader=PackageLoader("tpls", "."), autoescape=select_autoescape(["html", "xml"]))
         if args.config:
             self.file = os.path.realpath(args.config)
             if os.path.isdir(self.file):
@@ -60,53 +57,88 @@ class ChangelogSimpleHtml:
         self.name_slug = slugify(self.name)
 
         if os.path.isdir(self.out):
-            self.out = os.path.join(self.out, f'{self.name_slug}.html')
+            self.out = os.path.join(self.out, f"{self.name_slug}.html")
 
         changelog_file_name = self.CHANGELOG_FILE_NAME.format(cmp_name_slug=self.name_slug)
-        if self.args.user:
-            self.changelog_file = os.path.join(
-                os.getenv("HOME"),
-                self.DEF_USER_STORE_DIR,
-                changelog_file_name)
+        if self.args.input:
+            self.changelog_file = os.path.abspath(self.args.input)
         else:
-            self.changelog_file = os.path.join(
-                self.DEF_GLOBAL_STORE_DIR,
-                changelog_file_name)
-        if self.args.store_path:
-            self.changelog_file = os.path.join(self.args.store_path, changelog_file_name)
+            if self.args.user:
+                self.changelog_file = os.path.join(os.getenv("HOME"), self.DEF_USER_STORE_DIR, changelog_file_name)
+            else:
+                self.changelog_file = os.path.join(self.DEF_GLOBAL_STORE_DIR, changelog_file_name)
+            if self.args.store_path:
+                self.changelog_file = os.path.join(self.args.store_path, changelog_file_name)
         if not os.path.exists(self.changelog_file):
             raise self.ChangeLogException(f"Changelog file is not found: {self.changelog_file}")
 
         with open(self.changelog_file, "r") as f:
             self.changelog = yaml.safe_load(f)
+        if self.args.filter_author_email:
+            for his in self.changelog.get("history", []):
+                new_changelog = {}
+                for repo, commits in his.get("changelog", {}).items():
+                    new_commits = []
+                    for c in commits:
+                        if self.args.filter_author_email in c.get("author_email", ""):
+                            new_commits.append(c)
+                    new_changelog[repo] = new_commits
+                his["changelog"] = new_changelog
 
     def run(self):
-        template = self.j_env.get_template('index.jinja2')
-        variables = {
-            "name": self.name,
-            "history": self.changelog.get("history", [])
-        }
+        template = self.j_env.get_template("index.jinja2")
+        variables = {"name": self.name, "history": self.changelog.get("history", [])}
         with open(self.out, "w+") as f:
             f.write(template.render(**variables))
 
 
 def args_pars():
-    parser = argparse.ArgumentParser(
-        description='Compute a hash of multiple git locations')
-    parser.add_argument('-v', '--debug', action='count',
-                        default=0, help='Enable debugging')
-    parser.add_argument('-c', '--config', action='store', type=str, default=None,
-                        help=f'Path to the git_component config file, or directory where '
-                             f'{ChangelogSimpleHtml.DEF_CMP_FILE_NAME} is located (default=.)')
-    parser.add_argument('-l', '--link-config', action='store', type=str, default=None,
-                        help='Path to link generation config file (yml)')
-    parser.add_argument('out', action='store', type=str, default=None,
-                        help='path to the file or directory to write the results to')
-    parser.add_argument('--user', action='store_true', default=None,
-                        help='sets path to the git_component store to $HOME/.git_components/')
-    parser.add_argument('-s', '--store-path', action='store', type=str, default=None,
-                        help='path to the git_component store (where changelog file is located)'
-                             '(default=/etc/_git_components/')
+    parser = argparse.ArgumentParser(description="Compute a hash of multiple git locations")
+    parser.add_argument("-v", "--debug", action="count", default=0, help="Enable debugging")
+    parser.add_argument(
+        "-c",
+        "--config",
+        action="store",
+        type=str,
+        default=None,
+        help=f"Path to the git_component config file, or directory where "
+        f"{ChangelogSimpleHtml.DEF_CMP_FILE_NAME} is located (default=.)",
+    )
+    parser.add_argument(
+        "-i",
+        "--input",
+        type=str,
+        default=None,
+        help=f"Path to the changelog file " f"{ChangelogSimpleHtml.DEF_GLOBAL_STORE_DIR} is located",
+    )
+    parser.add_argument(
+        "-l", "--link_config", action="store", type=str, default=None, help="Path to link generation config file (yml)"
+    )
+    parser.add_argument(
+        "--filter_author_email",
+        action="store",
+        type=str,
+        default=None,
+        help="filter commits that contains this string in author email",
+    )
+    parser.add_argument(
+        "--user",
+        action="store_true",
+        default=None,
+        help="sets path to the git_component store to $HOME/.git_components/",
+    )
+    parser.add_argument(
+        "-s",
+        "--store-path",
+        action="store",
+        type=str,
+        default=None,
+        help="path to the git_component store (where changelog file is located)" "(default=/etc/_git_components/",
+    )
+    parser.add_argument(
+        "out", action="store", type=str, default=None, help="path to the file or directory to write the results to"
+    )
+
     return parser.parse_args()
 
 

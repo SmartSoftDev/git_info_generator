@@ -21,9 +21,9 @@ from utils import (
     compose_build_commit_hash,
     get_last_tag,
     gen_random_hash,
+    compute_check_sums,
+    parse_commits,
 )
-
-CHECKSUM_CHUNK_SIZE = 4096
 
 
 class AbortException(Exception):
@@ -230,18 +230,6 @@ def create_deb_package(gc, info, package_name, root_dir):
     return package_file
 
 
-def compute_check_sums(_file):
-    with open(_file, mode="rb", buffering=0) as fp:
-        md5_hash_func = hashlib.md5()
-        sha256_hash_func = hashlib.sha256()
-        buffer = fp.read(CHECKSUM_CHUNK_SIZE)
-        while len(buffer) > 0:
-            md5_hash_func.update(buffer)
-            sha256_hash_func.update(buffer)
-            buffer = fp.read(CHECKSUM_CHUNK_SIZE)
-    return sha256_hash_func.digest().hex(), md5_hash_func.digest().hex()
-
-
 def create_package(gc, info: dict, _package_type: str, _src_dir: str, keep_storage_dir: bool) -> None:
     package_name = os.path.basename(_src_dir)
     root_dir = os.path.dirname(_src_dir)
@@ -376,26 +364,6 @@ class GitComponent:
             with open(self.exec_info_fpath, "r") as f:
                 info = yaml.safe_load(f)
         return info
-
-    @staticmethod
-    def _parse_commits(txt):
-        res = []
-        commits = txt.split("_#._")
-        for commit in commits:
-            commit = commit.strip()
-            if len(commit) == 0:
-                continue
-            commit = commit.split("|$.|", maxsplit=4)
-            res.append(
-                {
-                    "hash": commit[0].strip(),
-                    "author": commit[1].strip(),
-                    "time": commit[2].strip(),
-                    "subject": commit[3].strip(),
-                    "body": commit[4].strip(),
-                }
-            )
-        return res
 
     def __get_location_list(self, field):
         component_field = self.file.get(field, [])
@@ -784,7 +752,7 @@ class GitComponent:
                     cmd += ["--", loc]
 
                     resp = subprocess.check_output(cmd, cwd=repo_cwd).decode("utf-8").strip()
-                    commits = self._parse_commits(resp)
+                    commits = parse_commits(resp)
                     print(f"Got {len(commits)} commits")
                     for commit in commits:
                         _hash = commit.get("hash")

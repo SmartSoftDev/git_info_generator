@@ -1,16 +1,18 @@
+import hashlib
 import json
 import os
 import re
 import subprocess
 import uuid
+from datetime import datetime, timezone
 from typing import Union, List
 
 # equivalent to [^a-zA-Z0-9]
-NON_ALPHANUM_PATTERN = re.compile(r'[\W_]+')
+NON_ALPHANUM_PATTERN = re.compile(r"[\W_]+")
 
 
 def slugify(text):
-    return NON_ALPHANUM_PATTERN.sub('-', text)
+    return NON_ALPHANUM_PATTERN.sub("-", text)
 
 
 def gen_random_hash():
@@ -76,7 +78,60 @@ def write_cfg_file(file_path, data, human_readable=False):
     # still we would like to sync the hole parent directory.
     dir_name = os.path.dirname(file_path)
     if not dir_name:
-        dir_name = '.'
+        dir_name = "."
     dir_fd = os.open(dir_name, os.O_DIRECTORY | os.O_CLOEXEC)
     os.fsync(dir_fd)
     os.close(dir_fd)
+
+
+CHECKSUM_CHUNK_SIZE = 4096
+
+
+def compute_check_sums(_file):
+    with open(_file, mode="rb", buffering=0) as fp:
+        md5_hash_func = hashlib.md5()
+        sha256_hash_func = hashlib.sha256()
+        buffer = fp.read(CHECKSUM_CHUNK_SIZE)
+        while len(buffer) > 0:
+            md5_hash_func.update(buffer)
+            sha256_hash_func.update(buffer)
+            buffer = fp.read(CHECKSUM_CHUNK_SIZE)
+    return sha256_hash_func.digest().hex(), md5_hash_func.digest().hex()
+
+
+def compute_string_json_check_sum(input):
+    if not isinstance(input, str):
+        input = json.dumps(input)
+    md5_hash_func = hashlib.md5()
+    sha256_hash_func = hashlib.sha256()
+    md5_hash_func.update(input)
+    return sha256_hash_func.digest().hex(), md5_hash_func.digest().hex()
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def utc_now_iso() -> str:
+    return utc_now().isoformat(timespec="seconds")
+
+
+def parse_commits(txt):
+    res = []
+    commits = txt.split("_#._")
+    for commit in commits:
+        commit = commit.strip()
+        if len(commit) == 0:
+            continue
+        commit = commit.split("|$.|", maxsplit=5)
+        res.append(
+            {
+                "hash": commit[0].strip(),
+                "author": commit[1].strip(),
+                "time": commit[2].strip(),
+                "subject": commit[3].strip(),
+                "author_email": commit[4].strip(),
+                "body": commit[5].strip(),
+            }
+        )
+    return res
